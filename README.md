@@ -187,7 +187,7 @@ The web API is the same private API the Overleaf website uses. It works today, b
 
 ## Building from source
 
-Every push to `main` is built on GitHub Actions (`.github/workflows/build.yml`, a Windows runner). The run's artifacts are the two release zips — the portable folder and the installer — and a tag `vX.Y.Z` also publishes them as a GitHub release.
+Every push to `main` is built on GitHub Actions (`.github/workflows/build.yml`, a Windows runner). The run's artifacts are the two release zips — the portable folder and the installer — and the same run publishes them as the GitHub release `vX.Y.Z` of the version in `package.json` (a new version number makes a new release).
 
 To build on your own Windows PC you need Rust (stable), Node.js 20+ and the MSVC build tools:
 

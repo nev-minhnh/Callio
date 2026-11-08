@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Report the Windows GNU target as installed (its std is built from source with -Zbuild-std).
+REAL_RUSTUP="${REAL_RUSTUP:-$HOME/.cargo/bin/rustup}"
+if [[ "$1" == "target" && "$2" == "list" ]]; then
+  if [[ "$*" == *"--installed"* ]]; then
+    "$REAL_RUSTUP" "$@"; echo "x86_64-pc-windows-gnu"; exit 0
+  fi
+  "$REAL_RUSTUP" "$@" | sed 's/^x86_64-pc-windows-gnu$/x86_64-pc-windows-gnu (installed)/'; exit 0
+fi
+exec "$REAL_RUSTUP" "$@"

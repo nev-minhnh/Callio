@@ -1,0 +1,17 @@
+:root { color-scheme: light dark; --acc: #0f5c3c; }
+body { font: 13px/1.4 "Segoe UI", system-ui, sans-serif; width: 340px; margin: 0; padding: 10px 12px 12px; }
+header { display: flex; align-items: center; gap: 8px; font-size: 14px; margin-bottom: 8px; }
+header img { width: 20px; height: 20px; }
+label { display: block; margin: 6px 0; font-size: 12px; color: #666; }
+label small { color: #999; }
+input, textarea, select { display: block; width: 100%; box-sizing: border-box; margin-top: 2px; font: inherit; padding: 4px 6px; border: 1px solid #bbb; border-radius: 5px; }
+textarea { resize: vertical; }
+.row { display: flex; gap: 8px; } .row label:first-child { width: 70px; } .grow { flex: 1; }
+button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid #bbb; background: transparent; cursor: pointer; }
+button.primary { background: var(--acc); border-color: var(--acc); color: #fff; width: 100%; margin-top: 8px; font-weight: 600; }
+button:disabled { opacity: .6; cursor: default; }
+.note { color: #777; font-size: 12px; }
+.warn { color: #9a6700; font-size: 12px; margin-top: 4px; }
+.ok { color: var(--acc); font-weight: 600; }
+.err { color: #c62828; }
+@media (prefers-color-scheme: dark) { :root { --acc: #c9962e; } body { background: #0e1814; color: #ebe7da; } input, textarea, select { background: #1a2b22; color: #ebe7da; border-color: #24392e; } label { color: #aaa; } }

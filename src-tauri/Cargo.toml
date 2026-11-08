@@ -1,0 +1,44 @@
+[package]
+name = "callio"
+version = "0.11.0"
+description = "Callio – Shape your folio. A lightweight editor for Markdown, LaTeX, Word, spreadsheets, presentations, PDF and pictures"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nev-minhnh/Callio"
+authors = ["Minh"]
+edition = "2021"
+rust-version = "1.80"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "cookies", "json", "multipart", "gzip", "stream"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+flate2 = "1"
+sha2 = "0.10"
+base64 = "0.22"
+regex-lite = "0.1"
+keyring = { version = "3", features = ["windows-native"] }
+urlencoding = "2"
+tokio = { version = "1", features = ["time", "macros", "sync", "net", "io-util"] }
+getrandom = "0.2"
+sevenz-rust2 = { version = "0.24", default-features = false }
+encoding_rs = "0.8"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+windows-sys = { version = "0.59", features = ["Win32_UI_Shell", "Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_Security_Credentials", "Win32_Security"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

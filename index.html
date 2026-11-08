@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Callio</title>
+  <link rel="icon" href="/favicon.png" type="image/png" />
+  <script src="/theme.js"></script>
+</head>
+<body>
+  <div id="app">
+    <header id="toolbar">
+      <div class="tb-group">
+        <button id="btn-sidebar" class="icon" title="Toggle sidebar (Ctrl+B)"><svg class="ic" aria-hidden="true"><use href="#ic-menu"/></svg></button>
+        <span class="brand"><img class="brand-logo" src="/callio-logo.png" alt="" draggable="false" />Callio</span>
+      </div>
+      <div class="tb-group">
+        <div class="menu-wrap">
+          <button id="btn-new" title="New file (Ctrl+N)" aria-haspopup="menu" aria-expanded="false">New <span class="caret">▾</span></button>
+          <div id="menu-new" class="menu" role="menu" hidden>
+            <button role="menuitem" data-new="md"><span class="fi md">MD</span><span>Markdown file</span><kbd>Ctrl+N</kbd></button>
+            <button role="menuitem" data-new="tex"><span class="fi tex">TeX</span><span>LaTeX document</span></button>
+            <button role="menuitem" data-new="bib"><span class="fi bib">BIB</span><span>BibTeX file</span></button>
+            <button role="menuitem" data-new="other"><span class="fi"><svg class="ic" aria-hidden="true"><use href="#ic-file"/></svg></span><span>Other file (any extension)…</span></button>
+            <button role="menuitem" data-new="folder"><span class="fi"><svg class="ic" aria-hidden="true"><use href="#ic-folder"/></svg></span><span>New folder…</span></button>
+          </div>
+        </div>
+        <div class="menu-wrap">
+          <button id="btn-open" title="Open (Ctrl+O)" aria-haspopup="menu" aria-expanded="false">Open <span class="caret">▾</span></button>
+          <div id="menu-open" class="menu" role="menu" hidden>
+            <button role="menuitem" data-act="open-file"><span>Open file…</span><kbd>Ctrl+O</kbd></button>
+            <button role="menuitem" data-act="open-folder"><span>Open folder…</span><kbd>Ctrl+Shift+O</kbd></button>
+          </div>
+        </div>
+        <div class="menu-wrap">
+          <button id="btn-save" title="Save (Ctrl+S)" aria-haspopup="menu" aria-expanded="false">Save <span class="caret">▾</span></button>
+          <div id="menu-save" class="menu" role="menu" hidden>
+            <button role="menuitem" data-act="save"><span>Save</span><kbd>Ctrl+S</kbd></button>
+            <button role="menuitem" data-act="save-as"><span>Save as…</span><kbd>Ctrl+Shift+S</kbd></button>
+            <div class="menu-sep"></div>
+            <button role="menuitem" data-act="export-pdf"><span>Export as PDF…</span><kbd>Ctrl+Shift+E</kbd></button>
+            <button role="menuitem" data-act="export-md"><span>Export as Markdown…</span><kbd>Ctrl+Shift+M</kbd></button>
+            <button role="menuitem" data-act="export-docx"><span>Export as Word / OpenDocument…</span></button>
+            <button role="menuitem" data-act="convert-md"><span>Convert a file to Markdown…</span></button>
+            <div class="menu-sep"></div>
+            <button role="menuitem" data-act="pdf-tools"><span>PDF tools…</span><kbd>merge, split, compress…</kbd></button>
+          </div>
+        </div>
+        <div id="undo-group" class="undo-group">
+          <button id="btn-undo" class="icon" title="Undo (Ctrl+Z)" disabled><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
+          <button id="btn-undo-list" class="icon caret" title="Undo several actions" disabled>▾</button>
+          <button id="btn-redo" class="icon" title="Redo (Ctrl+Y)" disabled><svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button>
+          <button id="btn-redo-list" class="icon caret" title="Redo several actions" disabled>▾</button>
+        </div>
+        <label id="autosave-toggle" class="switch" title="AutoSave: save every change automatically (text, notebooks and PDF annotations)">
+          <span>AutoSave</span><input type="checkbox" id="autosave-cb" /><span class="knob"></span>
+        </label>
+        <button id="btn-ocr" title="OCR: recognise the text of a scanned PDF or image, then edit and export it"><svg class="ic" aria-hidden="true"><use href="#ic-ocr"/></svg><span>OCR</span></button>
+        <button id="btn-compare" title="Compare two files or folders: text, code, JSON, CSV, Word, Excel, PowerPoint, PDF, pictures…"><svg class="ic" aria-hidden="true"><use href="#ic-compare"/></svg><span>Compare</span></button>
+        <button id="btn-pdftools" title="PDF tools: organize pages, merge, split, rotate, compress, protect, redact, watermark, page numbers, convert…"><svg class="ic" aria-hidden="true"><use href="#ic-tools"/></svg><span>PDF tools</span></button>
+      </div>
+      <div class="tb-group" id="tex-tools">
+        <button id="btn-compile" class="primary" title="Compile (Ctrl+Enter)"><span class="ico"><svg class="ic" aria-hidden="true"><use href="#ic-play"/></svg></span> Recompile</button>
+        <select id="sel-engine" title="LaTeX engine"></select>
+      </div>
+      <div class="tb-spacer"></div>
+      <div class="tb-group" id="ol-tools" hidden>
+        <span id="ol-badge" class="badge" title="Linked Overleaf project"></span>
+        <button id="btn-ol-pull" title="Pull from Overleaf"><svg class="ic" aria-hidden="true"><use href="#ic-pull"/></svg><span>Pull</span></button>
+        <button id="btn-ol-push" title="Push to Overleaf"><svg class="ic" aria-hidden="true"><use href="#ic-push"/></svg><span>Push</span></button>
+      </div>
+      <div class="tb-group seg" id="view-mode">
+        <button data-view="editor" title="Editor only (Ctrl+1)">Editor</button>
+        <button data-view="split" title="Split (Ctrl+2)">Split</button>
+        <button data-view="preview" title="Preview only (Ctrl+3)">Preview</button>
+      </div>
+      <button id="btn-library" title="Paper library (Ctrl+Shift+L) — cite with Alt+C"><svg class="ic" aria-hidden="true"><use href="#ic-library"/></svg><span>Library</span></button>
+      <button id="btn-ai" title="AI assistant (Ctrl+L)"><svg class="ic" aria-hidden="true"><use href="#ic-sparkles"/></svg><span>AI</span></button>
+      <button id="btn-settings" class="icon" title="Settings (Ctrl+,)"><svg class="ic" aria-hidden="true"><use href="#ic-settings"/></svg></button>
+    </header>
+
+    <nav id="tabs" role="tablist"></nav>
+
+    <main id="main">
+      <aside id="sidebar">
+        <div class="side-tabs">
+          <button data-side="files" class="active">Files</button>
+          <button data-side="outline">Outline</button>
+          <button data-side="history">History</button>
+          <button data-side="overleaf">Overleaf</button>
+        </div>
+        <div class="side-body" id="side-files">
+          <div class="side-head"><span id="folder-name">No folder</span>
+            <button id="btn-refresh-tree" class="icon small" title="Refresh"><svg class="ic" aria-hidden="true"><use href="#ic-refresh"/></svg></button></div>
+          <div id="tree"></div>
+        </div>
+        <div class="side-body" id="side-outline" hidden><div id="outline"></div></div>
+        <div class="side-body" id="side-history" hidden><div id="history-panel"></div></div>
+        <div class="side-body" id="side-overleaf" hidden><div id="overleaf-panel"></div></div>
+      </aside>
+      <div class="splitter" id="split-side"></div>
+
+      <section id="editor-pane">
+        <div id="welcome">
+          <h1><img class="welcome-logo" src="/callio-logo.png" alt="" draggable="false" />Callio</h1>
+          <p class="welcome-slogan">Shape your folio</p>
+          <p>A fast editor for Markdown, LaTeX, Word documents, spreadsheets and PDF — with Overleaf sync.</p>
+          <div class="welcome-actions">
+            <button id="w-open" class="primary">Open file…</button>
+            <button id="w-folder">Open folder…</button>
+            <button id="w-overleaf">Open from Overleaf…</button>
+          </div>
+          <div id="recent"></div>
+          <p class="hint">Tip: set Callio as the default for .md and .tex in <a href="#" id="w-assoc">Settings → File types</a>.</p>
+        </div>
+        <div id="fmt-bar" hidden>
+          <button data-fmt="visual" class="small toggle" title="Visual editing: show formatting, math, images and citations as they look; the line you are on shows its source"><svg class="ic" aria-hidden="true"><use href="#ic-eye"/></svg><span>Visual</span></button>
+          <span class="sep"></span>
+          <select data-fmt="heading" title="Paragraph style"><option value="">Style</option><option value="p">Normal text</option><option value="h1">Heading 1</option><option value="h2">Heading 2</option><option value="h3">Heading 3</option></select>
+          <button data-fmt="bold" class="icon small" title="Bold (Ctrl+B)"><b>B</b></button>
+          <button data-fmt="italic" class="icon small" title="Italic (Ctrl+I)"><i>I</i></button>
+          <button data-fmt="strike" class="icon small" title="Strikethrough"><s>S</s></button>
+          <button data-fmt="code" class="icon small mono" title="Code">&lt;/&gt;</button>
+          <span class="sep"></span>
+          <button data-fmt="ul" class="icon small" title="Bulleted list"><svg class="ic" aria-hidden="true"><use href="#ic-list"/></svg></button>
+          <button data-fmt="ol" class="icon small" title="Numbered list"><svg class="ic" aria-hidden="true"><use href="#ic-list-ordered"/></svg></button>
+          <button data-fmt="task" class="icon small md-only" title="Checklist"><svg class="ic" aria-hidden="true"><use href="#ic-list-checks"/></svg></button>
+          <button data-fmt="quote" class="icon small" title="Quote"><svg class="ic" aria-hidden="true"><use href="#ic-quote"/></svg></button>
+          <span class="sep"></span>
+          <button data-fmt="link" class="icon small" title="Link"><svg class="ic" aria-hidden="true"><use href="#ic-link"/></svg></button>
+          <button data-fmt="image" class="icon small" title="Image / figure"><svg class="ic" aria-hidden="true"><use href="#ic-image"/></svg></button>
+          <button data-fmt="table" class="icon small" title="Table"><svg class="ic" aria-hidden="true"><use href="#ic-table"/></svg></button>
+          <button data-fmt="math" class="icon small" title="Inline math"><svg class="ic" aria-hidden="true"><use href="#ic-superscript"/></svg></button>
+          <button data-fmt="display" class="icon small" title="Equation"><svg class="ic" aria-hidden="true"><use href="#ic-sigma"/></svg></button>
+          <button data-fmt="footnote" class="icon small" title="Footnote"><svg class="ic" aria-hidden="true"><use href="#ic-footnote"/></svg></button>
+          <button data-fmt="cite" class="small" title="Cite from your library (Alt+C)"><svg class="ic" aria-hidden="true"><use href="#ic-library"/></svg><span>Cite</span></button>
+        </div>
+        <div id="code-bar" hidden>
+          <span class="cb-kind"></span>
+          <button data-code="beautify" class="small" title="Beautify: indent and line up the file (Shift+Alt+F)"><svg class="ic" aria-hidden="true"><use href="#ic-sparkles"/></svg><span>Beautify</span></button>
+          <button data-code="minify" class="small" title="Minify: remove the spaces and line breaks between items"><svg class="ic" aria-hidden="true"><use href="#ic-minify"/></svg><span>Minify</span></button>
+          <button data-code="validate" class="small" title="Check that the file is well-formed and go to the first problem">✓ Validate</button>
+          <span class="sep"></span>
+          <button data-code="indent" class="small" title="Indentation: spaces or tabs, and convert the file">Indent: 2 ▾</button>
+          <span class="sep"></span>
+          <button data-code="fold" class="small" title="Fold every block (Ctrl+Alt+[)"><svg class="ic" aria-hidden="true"><use href="#ic-fold"/></svg><span>Fold all</span></button>
+          <button data-code="unfold" class="small" title="Unfold every block (Ctrl+Alt+])"><svg class="ic" aria-hidden="true"><use href="#ic-unfold"/></svg><span>Unfold all</span></button>
+        </div>
+        <div id="editor"></div>
+        <div id="wysiwyg-host"></div>
+        <div id="review-bar" hidden>
+          <span>AI suggestion</span>
+          <span class="tb-spacer"></span>
+          <button id="review-reject">Reject all</button>
+          <button id="review-accept" class="primary">Accept all</button>
+        </div>
+        <div id="ai-working" hidden><div class="spin small"></div><span></span><small></small><button class="small">Stop</button></div>
+      </section>
+      <div class="splitter" id="split-preview"></div>
+
+      <section id="preview-pane">
+        <div id="md-preview" class="markdown-body" hidden></div>
+        <div id="md-toolbar" role="toolbar" aria-label="Preview">
+          <button class="icon" data-mdz="out" title="Zoom out (Ctrl+-)"><svg class="ic" aria-hidden="true"><use href="#ic-minus"/></svg></button>
+          <button class="mdz-val" data-mdz="reset" title="Reset zoom (Ctrl+0)">100%</button>
+          <button class="icon" data-mdz="in" title="Zoom in (Ctrl+=)"><svg class="ic" aria-hidden="true"><use href="#ic-plus"/></svg></button>
+          <button data-mdz="fit" title="Fit the page to the pane">Fit</button>
+          <span class="sep"></span>
+          <button data-mdz="mirror" title="Line up the preview with the visual editor: same width and every line at the same height"><svg class="ic" aria-hidden="true"><use href="#ic-compare"/></svg><span>Match editor</span></button>
+        </div>
+        <div id="nb-view" hidden></div>
+        <pre id="txt-preview" hidden></pre>
+        <div id="struct-view" hidden></div>
+        <div id="csv-view" hidden></div>
+        <div id="pdf-wrap" hidden>
+          <div id="pdf-toolbar">
+            <button id="pdf-nav-btn" class="icon small" title="Pages and bookmarks panel"><svg class="ic" aria-hidden="true"><use href="#ic-sidebar"/></svg></button>
+            <select id="pdf-layout" title="Page layout">
+              <option value="auto" title="Single page; two pages, then a grid as you zoom out">Auto</option>
+              <option value="continuous">Single page</option>
+              <option value="two-page">Two pages</option>
+              <option value="two-page-cover">Two pages + cover</option>
+              <option value="wrapped">Grid</option>
+              <option value="horizontal">Horizontal</option>
+              <option value="single-page">One at a time</option>
+            </select>
+            <button id="pdf-zoom-out" class="icon small" title="Zoom out"><svg class="ic" aria-hidden="true"><use href="#ic-minus"/></svg></button>
+            <select id="pdf-zoom">
+              <option value="page-width">Fit width</option>
+              <option value="page-fit">Fit page</option>
+              <option value="auto">Auto</option>
+              <option value="0.75">75%</option><option value="1">100%</option>
+              <option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option>
+            </select>
+            <button id="pdf-zoom-in" class="icon small" title="Zoom in"><svg class="ic" aria-hidden="true"><use href="#ic-plus"/></svg></button>
+            <span class="pdf-pages"><input id="pdf-page" type="number" min="1" value="1" /> / <span id="pdf-count">0</span></span>
+            <span id="pdf-zoom-pct" class="pdf-pages"></span>
+            <span id="pdf-edit" hidden>
+              <span class="sep"></span>
+              <button data-tool="none" class="icon small on" title="Select and move (Esc)"><svg class="ic" aria-hidden="true"><use href="#ic-pointer"/></svg></button>
+              <button data-tool="text" class="icon small" title="Add a text box: click on the page"><svg class="ic" aria-hidden="true"><use href="#ic-type"/></svg></button>
+              <button data-tool="note" class="icon small" title="Add a note (a sticky note on the page)"><svg class="ic" aria-hidden="true"><use href="#ic-note"/></svg></button>
+              <button data-tool="draw" class="icon small" title="Draw / sign"><svg class="ic" aria-hidden="true"><use href="#ic-pen"/></svg></button>
+              <button data-tool="highlight" class="icon small" title="Highlight text: select it on the page"><svg class="ic" aria-hidden="true"><use href="#ic-highlighter"/></svg></button>
+              <button data-tool="image" class="icon small" title="Add an image"><svg class="ic" aria-hidden="true"><use href="#ic-image"/></svg></button>
+              <span class="sep"></span>
+              <select id="pdf-edit-font" title="Font (text boxes and notes)"><option>Arial</option></select>
+              <select id="pdf-edit-size" title="Text size / line width"><option value="6">6</option><option value="8">8</option><option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12" selected>12</option><option value="14">14</option><option value="16">16</option><option value="18">18</option><option value="20">20</option><option value="24">24</option><option value="28">28</option><option value="36">36</option><option value="48">48</option><option value="72">72</option></select>
+              <button id="pdf-edit-bold" class="icon small" title="Bold"><b>B</b></button>
+              <button id="pdf-edit-italic" class="icon small" title="Italic"><i>I</i></button>
+              <input id="pdf-edit-color" type="color" value="#1f2328" title="Colour" />
+              <button id="pdf-edit-save" class="small primary" title="Save the PDF with your changes (Ctrl+S)" hidden>Save</button>
+            </span>
+            <button id="pdf-pages-btn" class="small" title="Reorder, rotate, duplicate or delete pages" hidden><svg class="ic" aria-hidden="true"><use href="#ic-grid"/></svg><span>Pages</span></button>
+            <span id="doc-actions" hidden>
+              <span class="sep"></span>
+              <button id="doc-export" class="small" title="Save a copy as PDF, Word, OpenDocument, RTF, HTML, Markdown or LaTeX">Export ▾</button>
+              <button id="doc-edit-md" class="small" title="Convert to Markdown and open it for editing (pictures saved alongside)"><svg class="ic" aria-hidden="true"><use href="#ic-pen"/></svg><span>Edit as Markdown</span></button>
+            </span>
+            <span class="tb-spacer"></span>
+            <span id="pdf-find" class="pdf-find" hidden>
+              <input id="pdf-find-input" type="search" placeholder="Find in PDF" />
+              <button id="pdf-find-prev" class="icon small" title="Previous (Shift+Enter)"><svg class="ic" aria-hidden="true"><use href="#ic-arrow-up"/></svg></button>
+              <button id="pdf-find-next" class="icon small" title="Next (Enter)"><svg class="ic" aria-hidden="true"><use href="#ic-arrow-down"/></svg></button>
+              <span id="pdf-find-count" class="note"></span>
+            </span>
+            <button id="pdf-find-btn" class="icon small" title="Find (Ctrl+F)"><svg class="ic" aria-hidden="true"><use href="#ic-search"/></svg></button>
+            <button id="pdf-sync" class="small" title="Jump to the PDF location of the cursor (Ctrl+Alt+J)"><svg class="ic" aria-hidden="true"><use href="#ic-sync"/></svg><span>PDF</span></button>
+            <button id="btn-logs" class="small" title="Logs and errors">Logs <span id="log-count" class="count"></span></button>
+            <select id="pdf-viewer-kind" title="PDF viewer" hidden>
+              <option value="callio">Callio viewer</option>
+              <option value="edge">Edge viewer</option>
+            </select>
+            <button id="pdf-open-ext" class="icon small" title="Open in the default PDF app"><svg class="ic" aria-hidden="true"><use href="#ic-external"/></svg></button>
+          </div>
+          <div id="pdf-stage">
+            <aside id="pdf-nav" hidden>
+              <div class="seg small" id="pdf-nav-tabs"><button data-t="pages" class="active">Pages</button><button data-t="marks">Bookmarks</button></div>
+              <div id="pdf-thumbs"></div>
+              <div id="pdf-marks" hidden></div>
+            </aside>
+            <iframe id="pdf-native" title="PDF" hidden></iframe>
+            <div id="pdf-container" tabindex="0"><div id="pdf-viewer" class="pdfViewer"></div></div>
+            <div id="pdf-empty"><span class="idle">Compile to see the PDF (Ctrl+Enter).</span><span class="busy"><span class="big-spinner"></span>Compiling…</span></div>
+            <div id="compile-errors" hidden></div>
+            <div id="compile-spinner" hidden><div class="spin"></div></div>
+          </div>
+          <div id="log-panel" hidden>
+            <div class="log-head">
+              <div class="seg small" id="log-filter">
+                <button data-f="all" class="active">All</button>
+                <button data-f="error">Errors</button>
+                <button data-f="warning">Warnings</button>
+                <button data-f="raw">Raw log</button>
+              </div>
+              <span class="tb-spacer"></span>
+              <button id="log-close" class="icon small"><svg class="ic" aria-hidden="true"><use href="#ic-x"/></svg></button>
+            </div>
+            <div id="log-list"></div>
+            <pre id="log-raw" hidden></pre>
+          </div>
+        </div>
+        <div id="preview-empty">Nothing to preview.</div>
+      </section>
+      <div class="splitter" id="split-ai" hidden></div>
+      <aside id="ai-panel" hidden>
+        <div class="ai-head">
+          <select id="ai-model" title="Model for chat"></select>
+          <select id="ai-effort" title="Effort: higher means more thorough answers, slower and uses your limits faster" hidden>
+            <option value="">Effort</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra</option><option value="max">Max</option>
+          </select>
+          <button id="ai-mode" class="icon small" hidden></button>
+          <button id="ai-web" class="icon small toggle" title="Allow internet: web search, reading pages, verifying citations"><svg class="ic" aria-hidden="true"><use href="#ic-globe"/></svg></button>
+          <div class="menu-wrap">
+            <button id="ai-more" class="icon small" title="More" aria-haspopup="menu"><svg class="ic" aria-hidden="true"><use href="#ic-more"/></svg></button>
+            <div class="menu right" role="menu" hidden>
+              <button role="menuitem" data-ai="new"><span>New chat</span></button>
+              <button role="menuitem" data-ai="verify-bib"><span>Verify citations in .bib…</span></button>
+              <button role="menuitem" data-ai="skills"><span>Choose skills…</span></button>
+              <button role="menuitem" data-ai="memory"><span>Project memory…</span></button>
+              <button role="menuitem" data-ai="settings"><span>AI settings…</span></button>
+            </div>
+          </div>
+          <button id="ai-close" class="icon small" title="Close (Ctrl+L)"><svg class="ic" aria-hidden="true"><use href="#ic-x"/></svg></button>
+        </div>
+        <div class="ai-sess">
+          <button id="ai-sess-btn" class="small" title="Saved conversations in this folder"><span id="ai-sess-title">New chat</span> <span class="caret">▾</span></button>
+          <span id="ai-sess-proj"></span>
+          <button id="ai-sess-new" class="icon small" title="New chat">＋</button>
+          <div id="ai-sess-menu" hidden></div>
+        </div>
+        <div id="ai-messages"><div class="ai-empty">
+          <b>Ask about your document</b>
+          <p>Select text in the editor for quick rewrites (Ctrl+.), click <b>✨ Fix</b> on a compile error, or chat here. Suggested edits appear as a diff you accept or reject.</p>
+        </div></div>
+        <div id="ai-files" hidden></div>
+        <div class="ai-context" id="ai-context"></div>
+        <div class="ai-input">
+          <div id="ai-slash" class="slash-menu" role="listbox" hidden></div>
+          <textarea id="ai-text" rows="3" placeholder="Ask, or describe a change… Type / for skills and commands. (Enter to send, Shift+Enter for a new line)"></textarea>
+          <div class="ai-send-row">
+            <span id="ai-skill-chip" class="chip" title="Skills used in this chat"></span>
+            <span class="tb-spacer"></span>
+            <button id="ai-stop" class="small" hidden>■ Stop</button>
+            <button id="ai-send" class="primary small">Send</button>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <footer id="statusbar">
+      <span id="st-path"></span>
+      <span id="st-install" hidden><progress max="1"></progress><span></span></span>
+      <span class="tb-spacer"></span>
+      <span id="st-msg"></span>
+      <span id="st-words"></span>
+      <span id="st-pos"></span>
+      <button id="st-check" class="st-btn" hidden></button>
+      <button id="st-indent" class="st-btn" hidden title="Indentation — click to change or convert"></button>
+      <button id="st-enc" class="st-btn" hidden></button>
+      <button id="st-eol" class="st-btn" hidden></button>
+      <span id="st-kind"></span>
+    </footer>
+  </div>
+
+  <dialog id="dlg-settings">
+    <form method="dialog" id="settings-form">
+      <header class="dlg-head set-head"><h2><img class="set-logo" src="/callio-logo.png" alt="" draggable="false" /><span>Settings</span></h2><button class="icon" value="close"><svg class="ic" aria-hidden="true"><use href="#ic-x"/></svg></button></header>
+      <div class="dlg-body">
+        <div class="settings-nav">
+          <button type="button" data-sec="editor" class="active"><svg class="ic" aria-hidden="true"><use href="#ic-editor"/></svg><span>Editor</span></button>
+          <button type="button" data-sec="latex"><svg class="ic" aria-hidden="true"><use href="#ic-latex"/></svg><span>LaTeX</span></button>
+          <button type="button" data-sec="overleaf"><svg class="ic" aria-hidden="true"><use href="#ic-leaf"/></svg><span>Overleaf</span></button>
+          <button type="button" data-sec="ai"><svg class="ic" aria-hidden="true"><use href="#ic-sparkles"/></svg><span>AI</span></button>
+          <button type="button" data-sec="library"><svg class="ic" aria-hidden="true"><use href="#ic-library"/></svg><span>Library</span></button>
+          <button type="button" data-sec="ocr"><svg class="ic" aria-hidden="true"><use href="#ic-ocr"/></svg><span>OCR</span></button>
+          <button type="button" data-sec="files"><svg class="ic" aria-hidden="true"><use href="#ic-file-types"/></svg><span>File types</span></button>
+          <button type="button" data-sec="about"><svg class="ic" aria-hidden="true"><use href="#ic-info"/></svg><span>About</span></button>
+        </div>
+        <div class="settings-pages">
+          <section data-sec="editor">
+            <label>Theme <select name="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+            <label>Font size <input name="fontSize" type="number" min="9" max="32" /></label>
+            <label>Editor font <input name="fontFamily" type="text" /></label>
+            <label class="check"><input name="wordWrap" type="checkbox" /> Wrap long lines</label>
+            <label class="check"><input name="lineNumbers" type="checkbox" /> Line numbers</label>
+            <label class="check"><input name="spellcheck" type="checkbox" /> Spell check (Windows dictionary)</label>
+            <label class="check"><input name="autoSave" type="checkbox" /> Auto-save after typing stops</label>
+            <label class="check"><input name="syncScroll" type="checkbox" /> Scroll the editor and the preview together (Markdown and LaTeX)</label>
+            <label>Tab size <input name="tabSize" type="number" min="1" max="8" /></label>
+          </section>
+          <section data-sec="latex" hidden>
+            <label>Engine
+              <select name="engine">
+                <option value="tectonic">Tectonic (bundled download, no TeX install needed)</option>
+                <option value="latexmk">latexmk (TinyTeX / MiKTeX / TeX Live)</option>
+                <option value="pdflatex">pdfLaTeX</option>
+                <option value="xelatex">XeLaTeX</option>
+                <option value="lualatex">LuaLaTeX</option>
+                <option value="overleaf">Overleaf servers (needs linked project)</option>
+              </select>
+            </label>
+            <div class="engine-cards">
+              <div class="engine-card" data-engine="tectonic">
+                <div class="ec-main"><b>Tectonic</b><span class="ec-desc">Self-contained engine; fetches packages automatically. ~30 MB.</span><span class="ec-status note"></span></div>
+                <div class="ec-actions"><button type="button" class="ec-install">Install</button><button type="button" class="ec-remove" hidden>Remove</button></div>
+              </div>
+              <div class="engine-card" data-engine="tinytex">
+                <div class="ec-main"><b>TeX distribution — latexmk, pdfLaTeX, XeLaTeX, LuaLaTeX</b><span class="ec-desc">Installs TinyTeX (TeX Live) for Callio only, no admin rights. ~75 MB download, ~290 MB on disk. Uses MiKTeX or TeX Live instead if you already have one.</span><span class="ec-status note"></span></div>
+                <div class="ec-actions"><button type="button" class="ec-install">Install</button><button type="button" class="ec-remove" hidden>Remove</button></div>
+              </div>
+            </div>
+            <label class="check"><input name="autoInstallPackages" type="checkbox" /> Install missing LaTeX packages automatically while compiling (TinyTeX)</label>
+            <label>latexmk flavour
+              <select name="latexmkFlavor"><option value="pdf">pdfLaTeX</option><option value="xelatex">XeLaTeX</option><option value="lualatex">LuaLaTeX</option></select>
+            </label>
+            <label>Auto-compile
+              <select name="autoCompile"><option value="off">Off</option><option value="save">On save</option><option value="idle">After typing stops</option></select>
+            </label>
+            <label class="check"><input name="shellEscape" type="checkbox" /> Allow shell escape (needed for minted; only for trusted documents)</label>
+            <label>Custom TeX bin folder (optional) <input name="texBin" type="text" placeholder="e.g. C:\texlive\2026\bin\windows" /></label>
+          </section>
+          <section data-sec="overleaf" hidden>
+            <label>Overleaf server <input name="overleafUrl" type="text" placeholder="https://www.overleaf.com" /></label>
+            <label>Sync method
+              <select name="overleafMode"><option value="auto">Auto (Git when a token is set, else web)</option><option value="git">Git only</option><option value="web">Web only</option></select>
+            </label>
+            <fieldset>
+              <legend>Git integration (official)</legend>
+              <p class="note">Create a token in Overleaf → Account Settings → Git integration. Stored in Windows Credential Manager. Requires <a href="#" data-url="https://git-scm.com/download/win">Git for Windows</a>.</p>
+              <label>Git token <input id="ol-token" type="password" autocomplete="off" placeholder="olp_…" /></label>
+            </fieldset>
+            <fieldset>
+              <legend>Overleaf account (project list, web sync, Overleaf compiles)</legend>
+              <p class="note">Sign in once in Callio's Overleaf window (email, Google, ORCID or your institution). Callio keeps the session fresh by itself and renews it automatically when it expires.</p>
+              <div class="row">
+                <button type="button" id="btn-ol-signin" class="primary">Sign in to Overleaf</button>
+                <button type="button" id="btn-ol-test">Check connection</button>
+                <button type="button" id="btn-ol-signout">Sign out</button>
+              </div>
+              <span id="ol-test-result" class="note"></span>
+              <details class="adv"><summary>Advanced: paste a session cookie manually</summary>
+                <p class="note">Only if the sign-in window can't be used: copy <code>overleaf_session2</code> from your browser's DevTools → Application → Cookies.</p>
+                <label>Session cookie <input id="ol-cookie" type="password" autocomplete="off" placeholder="s%3A…" /></label>
+              </details>
+            </fieldset>
+          </section>
+          <section data-sec="ai" hidden>
+            <div id="ai-settings"></div>
+          </section>
+          <section data-sec="library" hidden>
+            <div id="lib-settings"></div>
+          </section>
+          <section data-sec="ocr" hidden>
+            <div id="ocr-settings"></div>
+          </section>
+          <section data-sec="files" hidden>
+            <p>Register Callio in Windows <b>Open with…</b> for these file types (current user, no admin rights needed):</p>
+            <p class="mono" id="assoc-exts"></p>
+            <div class="row">
+              <button type="button" id="btn-assoc-register" class="primary">Register file types</button>
+              <button type="button" id="btn-assoc-unregister">Remove</button>
+            </div>
+            <p class="note" id="assoc-status"></p>
+            <p class="note">Windows 11 only lets you pick the default app yourself. After registering, click below and choose Callio for .md and .tex, or right-click a file → Open with → Choose another app → Callio → <b>Always</b>.</p>
+            <button type="button" id="btn-default-apps">Open Windows Default apps</button>
+          </section>
+          <section data-sec="about" hidden>
+            <div class="about-hero"><img src="/callio-logo.png" alt="" draggable="false" /><div><h3>Callio <span id="about-version"></span></h3><p class="about-slogan">Shape your folio</p></div></div>
+            <p>A lightweight editor for Markdown, LaTeX, Word documents, spreadsheets, presentations, PDF and pictures. Built with Rust (Tauri), CodeMirror, KaTeX, PDF.js and the storytold Craft engines (WordCraft, GridCraft, DeckCraft, PdfCraft, LightCraft).</p>
+            <p class="note">Open source under the MIT or Apache-2.0 licence · <a href="#" data-url="https://github.com/nev-minhnh/Callio">github.com/nev-minhnh/Callio</a></p>
+            <p class="note">Settings: <span class="mono" id="about-paths"></span></p>
+            <h4>Uninstall</h4>
+            <p class="note">Removes Callio completely: “Open with” and default-app entries, saved keys and sign-ins, settings, AI memory, history, the paper library, the TinyTeX it installed, skills it copied to Claude Code, and the program itself. Your own documents are never touched.</p>
+            <button type="button" id="btn-uninstall" class="danger">Uninstall Callio…</button>
+          </section>
+        </div>
+      </div>
+      <footer class="dlg-foot"><button value="close" class="primary">Done</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-prompt">
+    <form method="dialog">
+      <header class="dlg-head"><h2 id="prompt-title"></h2></header>
+      <div class="dlg-body col"><p id="prompt-text"></p><input id="prompt-input" type="text" /></div>
+      <footer class="dlg-foot"><button value="cancel">Cancel</button><button value="ok" class="primary" id="prompt-ok">OK</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-library">
+    <div class="lib-head">
+      <b class="lib-title"><svg class="ic" aria-hidden="true"><use href="#ic-library"/></svg><span>Library</span></b>
+      <input id="lib-q" type="search" placeholder="Search titles, authors and the full text of every paper…  (use &quot;quotes&quot; for a phrase)" spellcheck="false">
+      <div class="menu-wrap">
+        <button id="lib-add" class="primary small" aria-haspopup="menu">+ Add ▾</button>
+        <div class="menu right" role="menu" hidden>
+          <button role="menuitem" data-lib="pdf"><span>PDF files…</span></button>
+          <button role="menuitem" data-lib="id"><span>By DOI, arXiv id or link…</span></button>
+          <button role="menuitem" data-lib="bib"><span>Import a .bib file…</span></button>
+          <button role="menuitem" data-lib="ext"><span>Edge extension (save from the browser)…</span></button>
+        </div>
+      </div>
+      <button class="icon" id="lib-close" title="Close (Esc)"><svg class="ic" aria-hidden="true"><use href="#ic-x"/></svg></button>
+    </div>
+    <div class="lib-main">
+      <nav id="lib-nav"></nav>
+      <div id="lib-list" tabindex="0"></div>
+      <aside id="lib-detail"></aside>
+    </div>
+    <div class="lib-foot"><span id="lib-status" class="note"></span><span class="tb-spacer"></span><span class="note">Drop PDF files here to add them · Alt+C in the editor cites a paper</span></div>
+  </dialog>
+
+  <div id="cite-pop" hidden>
+    <input id="cite-q" type="text" placeholder="Search your library — title, author, words in the paper…" spellcheck="false" autocomplete="off">
+    <div id="cite-list" role="listbox"></div>
+    <div class="cite-foot note"><span>↑↓ choose · Enter cite · Esc close</span><span class="tb-spacer"></span><span id="cite-style"></span></div>
+  </div>
+
+  <dialog id="dlg-memory">
+    <div class="dlg-head"><h2>Project memory</h2><button class="icon" id="mem-close"><svg class="ic" aria-hidden="true"><use href="#ic-x"/></svg></button></div>
+    <div class="dlg-body col">
+      <p class="note" id="mem-sum"></p>
+      <p class="note">Callio keeps your AI conversations for this folder on this PC and recalls the relevant bits automatically — by matching words, names, citation keys and files, without asking any AI model (no extra tokens). Pinned notes are always included.</p>
+      <h3 class="set-h">Pinned</h3>
+      <div id="mem-pins"></div>
+      <div class="row"><button type="button" id="mem-add" class="small">＋ Pin a note…</button></div>
+      <h3 class="set-h">Recent messages</h3>
+      <div id="mem-recent" class="mem-list"></div>
+    </div>
+    <div class="dlg-foot"><button type="button" id="mem-wipe">Forget everything for this project</button><span class="tb-spacer"></span></div>
+  </dialog>
+
+  <dialog id="dlg-export">
+    <div class="dlg-head"><h2>Export as PDF</h2><button class="icon" id="exp-close"><svg class="ic" aria-hidden="true"><use href="#ic-x"/></svg></button></div>
+    <div class="dlg-body exp-body">
+      <p class="note" id="exp-note"></p>
+      <div id="exp-md-opts">
+        <label>Page size <select id="exp-size"><option value="A4">A4</option><option value="Letter">Letter</option><option value="A5">A5</option><option value="Legal">Legal</option></select></label>
+        <label>Margins <select id="exp-margin"><option value="18mm 16mm">Normal</option><option value="12mm 10mm">Narrow</option><option value="25mm 25mm">Wide</option></select></label>
+        <label class="check exp-md-only"><input type="checkbox" id="exp-toc" checked> Table of contents at the start (with links)</label>
+        <label class="check exp-md-only"><input type="checkbox" id="exp-num"> Number the headings (1, 1.1, 1.2 …)</label>
+        <label class="check" id="exp-lines-row"><input type="checkbox" id="exp-lines"> Line numbers</label>
+      </div>
+      <label class="check"><input type="checkbox" id="exp-open" checked> Open the PDF when done</label>
+    </div>
+    <div class="dlg-foot"><span class="tb-spacer"></span><button type="button" id="exp-cancel">Cancel</button><button type="button" id="exp-go" class="primary">Export…</button></div>
+  </dialog>
+
+  <dialog id="dlg-version">
+    <div class="dlg-head"><h2 id="ver-title">Version</h2><button class="icon" id="ver-close"><svg class="ic" aria-hidden="true"><use href="#ic-x"/></svg></button></div>
+    <div class="ver-legend"><span class="lg-add">Green: text in this version</span><span class="lg-del">Red: text in your current file that this version doesn't have</span></div>
+    <div id="ver-diff"></div>
+    <div class="dlg-foot">
+      <button type="button" id="ver-name">Name this version…</button>
+      <span class="tb-spacer"></span>
+      <button type="button" id="ver-copy">Copy text</button>
+      <button type="button" id="ver-restore" class="primary">Restore this version</button>
+    </div>
+  </dialog>
+
+  <dialog id="dlg-bib">
+    <div class="dlg-head"><h2 id="bib-title">Citation check</h2><button class="icon" id="bib-close"><svg class="ic" aria-hidden="true"><use href="#ic-x"/></svg></button></div>
+    <div class="bib-top"><progress id="bib-bar" max="1"></progress><span id="bib-summary" class="note"></span></div>
+    <div class="bib-opts note">Checked against your 📚 library first, then Crossref and OpenAlex.
+      <label>Re-check doubtful entries with <select id="bib-deep"><option value="">nothing more</option><option value="sonar-pro">Perplexity academic search</option><option value="sonar-deep-research">Perplexity Deep Research (slow, thorough)</option></select></label>
+      <button type="button" class="small" id="bib-rerun">Check again</button></div>
+    <div id="bib-list"></div>
+  </dialog>
+
+  <dialog id="dlg-skills">
+    <div class="dlg-head"><h2>Skills for this chat</h2><button class="icon" id="skills-close"><svg class="ic" aria-hidden="true"><use href="#ic-x"/></svg></button></div>
+    <div class="dlg-body col"><p class="note">Ticked skills are added to the AI's instructions. Manage folders in Settings → AI.</p><div id="skills-list"></div></div>
+  </dialog>
+
+  <dialog id="dlg-install">
+    <div class="dlg-head"><h2 id="inst-title">Installing</h2></div>
+    <div class="dlg-body col">
+      <div class="inst-steps"><span data-step="download">1 · Download</span><span data-step="extract">2 · Unpack</span><span data-step="setup">3 · Set up</span></div>
+      <progress id="inst-bar" max="1"></progress>
+      <p id="inst-label" class="inst-label"></p>
+      <p id="inst-pct" class="note"></p>
+    </div>
+    <div class="dlg-foot">
+      <button type="button" id="inst-hide">Run in background</button>
+      <button type="button" id="inst-cancel">Cancel</button>
+      <button type="button" id="inst-close" class="primary" hidden>Done</button>
+    </div>
+  </dialog>
+
+  <button id="ai-sel-btn" title="AI actions for the selection (Ctrl+.)" hidden><svg class="ic" aria-hidden="true"><use href="#ic-sparkles"/></svg></button>
+  <div id="ai-actions" class="menu floating" role="menu" hidden></div>
+  <div id="toasts"></div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

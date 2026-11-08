@@ -1,0 +1,38 @@
+Callio – Shape your folio
+Copyright (c) 2026 Minh (nev-minhnh) and the Callio contributors
+Licensed under the MIT license or the Apache License, Version 2.0, at your option.
+
+Callio includes or links the following third-party software. Each keeps its own license.
+
+Office, picture and PDF engines (callio-office.exe)
+  WordCraft, GridCraft, DeckCraft, PdfCraft, LightCraft
+  and craft-libs — storytold / the ArtCraft team           MIT OR Apache-2.0
+  https://github.com/storytold
+
+Application shell
+  Tauri 2 and its plugins                                  MIT OR Apache-2.0
+  Microsoft Edge WebView2 (runtime ships with Windows)     Microsoft Software License Terms
+
+Editor and preview (JavaScript)
+  CodeMirror 6, Lezer                                      MIT
+  ProseMirror                                              MIT
+  markdown-it, @vscode/markdown-it-katex                   MIT
+  KaTeX                                                    MIT
+  highlight.js                                             BSD-3-Clause
+  PDF.js (pdfjs-dist)                                      Apache-2.0
+  pdf-lib, @pdf-lib/fontkit                                MIT
+  DOMPurify                                                MPL-2.0 OR Apache-2.0
+  js-beautify                                              MIT
+  yaml                                                     ISC
+  fflate                                                   MIT
+  citeproc-js (citeproc)                                   CPAL-1.0 OR AGPL-1.0
+    Original Code: citeproc-js, Copyright (c) 2009-2025 Frank Bennett.
+    https://github.com/Juris-M/citeproc-js
+
+Rust crates
+  The full list of Rust dependencies and their licenses is in office/Cargo.lock and
+  src-tauri/Cargo.lock; `cargo about` or `cargo license` prints it. They are licensed
+  under MIT, Apache-2.0, BSD, ISC, Zlib, Unicode-3.0, MPL-2.0 or compatible terms.
+
+Ribbon icons are the Craft apps' icons exported to SVG (MIT OR Apache-2.0); the
+interface icons follow the Lucide style (ISC) and were drawn for Callio.

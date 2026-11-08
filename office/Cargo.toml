@@ -1,0 +1,91 @@
+[package]
+name = "callio-office"
+version = "0.11.0"
+edition = "2024"
+description = "Callio's office engine: Word documents, spreadsheets, presentations, pictures and PDF tools (WordCraft, GridCraft, DeckCraft, LightCraft and PdfCraft by the ArtCraft team, MIT OR Apache-2.0)"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Started by Callio only when an office file or a PDF tool is used, so the editor itself stays small.
+[[bin]]
+name = "callio-office"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+png = "0.18"
+# WordCraft (documents)
+wordcraft-doc = { git = "https://github.com/storytold/wordcraft", rev = "729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b" }
+wordcraft-docx = { git = "https://github.com/storytold/wordcraft", rev = "729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b" }
+wordcraft-docbin = { git = "https://github.com/storytold/wordcraft", rev = "729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b" }
+wordcraft-formats = { git = "https://github.com/storytold/wordcraft", rev = "729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b" }
+wordcraft-pdf = { git = "https://github.com/storytold/wordcraft", rev = "729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b" }
+wordcraft-engine = { git = "https://github.com/storytold/wordcraft", rev = "729cd0a5fc953bbedbfdec4f6af18ad6d1780b3b" }
+# GridCraft (spreadsheets)
+gridcraft-core = { git = "https://github.com/storytold/gridcraft", rev = "6a8eb4ff42cfa88b5bdd3eec13c6db3874d95214" }
+gridcraft-model = { git = "https://github.com/storytold/gridcraft", rev = "6a8eb4ff42cfa88b5bdd3eec13c6db3874d95214" }
+gridcraft-engine = { git = "https://github.com/storytold/gridcraft", rev = "6a8eb4ff42cfa88b5bdd3eec13c6db3874d95214" }
+gridcraft-chart = { git = "https://github.com/storytold/gridcraft", rev = "6a8eb4ff42cfa88b5bdd3eec13c6db3874d95214" }
+gridcraft-pdf = { git = "https://github.com/storytold/gridcraft", rev = "6a8eb4ff42cfa88b5bdd3eec13c6db3874d95214" }
+gridcraft-numfmt = { git = "https://github.com/storytold/gridcraft", rev = "6a8eb4ff42cfa88b5bdd3eec13c6db3874d95214" }
+# DeckCraft (presentations)
+deckcraft-engine = { git = "https://github.com/storytold/deckcraft", rev = "159ed07eb3f0522a5dc97d7cf1858242a6638659" }
+deckcraft-text = { git = "https://github.com/storytold/deckcraft", rev = "159ed07eb3f0522a5dc97d7cf1858242a6638659" }
+# PdfCraft (PDF tools)
+pdfcraft-cos = { git = "https://github.com/storytold/pdfcraft", rev = "f42fda734243b66f54db87923d7c981d5221419e" }
+pdfcraft-organize = { git = "https://github.com/storytold/pdfcraft", rev = "f42fda734243b66f54db87923d7c981d5221419e" }
+pdfcraft-edit = { git = "https://github.com/storytold/pdfcraft", rev = "f42fda734243b66f54db87923d7c981d5221419e" }
+pdfcraft-optimize = { git = "https://github.com/storytold/pdfcraft", rev = "f42fda734243b66f54db87923d7c981d5221419e" }
+pdfcraft-redact = { git = "https://github.com/storytold/pdfcraft", rev = "f42fda734243b66f54db87923d7c981d5221419e" }
+pdfcraft-annot = { git = "https://github.com/storytold/pdfcraft", rev = "f42fda734243b66f54db87923d7c981d5221419e" }
+pdfcraft-create = { git = "https://github.com/storytold/pdfcraft", rev = "f42fda734243b66f54db87923d7c981d5221419e" }
+pdfcraft-crypt = { git = "https://github.com/storytold/pdfcraft", rev = "f42fda734243b66f54db87923d7c981d5221419e" }
+pdfcraft-forms = { git = "https://github.com/storytold/pdfcraft", rev = "f42fda734243b66f54db87923d7c981d5221419e" }
+pdfcraft-model = { git = "https://github.com/storytold/pdfcraft", rev = "f42fda734243b66f54db87923d7c981d5221419e" }
+
+# LightCraft (photos and pictures)
+lightcraft-engine = { git = "https://github.com/storytold/lightcraft", rev = "de096566ff7a9607a2933c5135e79a83f555ecbf", default-features = false }
+lightcraft-geom = { git = "https://github.com/storytold/lightcraft", rev = "de096566ff7a9607a2933c5135e79a83f555ecbf" }
+jpeg-encoder = { version = "0.7", default-features = false, features = ["std"] }
+
+[patch.crates-io]
+# the forks the upstream workspaces build with
+krilla = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
+hayro-syntax = { git = "https://github.com/storytold/pdfcraft", rev = "f42fda734243b66f54db87923d7c981d5221419e" }
+hayro-jbig2 = { git = "https://github.com/storytold/pdfcraft", rev = "f42fda734243b66f54db87923d7c981d5221419e" }
+
+[profile.release]
+opt-level = "s"
+# thin: a whole-program (fat) LTO of five engines needs more memory than a build machine has
+lto = "thin"
+codegen-units = 8
+panic = "unwind"
+strip = true
+
+# the picture pipeline runs on every slider move: built for speed, not size
+[profile.release.package.lightcraft-pipeline]
+opt-level = 3
+[profile.release.package.lightcraft-raster]
+opt-level = 3
+[profile.release.package.lightcraft-color]
+opt-level = 3
+[profile.release.package.lightcraft-codecs]
+opt-level = 3
+[profile.release.package.lightcraft-develop]
+opt-level = 3
+[profile.release.package.lightcraft-geom]
+opt-level = 3
+[profile.release.package.lightcraft-raw]
+opt-level = 3
+[profile.release.package.lightcraft-gpu]
+opt-level = 3
+[profile.release.package.zune-jpeg]
+opt-level = 3
+[profile.release.package.jpeg-encoder]
+opt-level = 3
+[profile.release.package.png]
+opt-level = 3
+[profile.release.package.miniz_oxide]
+opt-level = 3

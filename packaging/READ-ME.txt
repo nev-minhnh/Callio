@@ -1,0 +1,57 @@
+Callio {{VERSION}} (portable)
+Callio – Shape your folio
+
+Callio is the new name of Proemia (and, before that, Quire). On first start it moves your
+settings, saved keys, paper library, history, TinyTeX and Overleaf links over, and replaces the old
+"Open with" entries. Start Callio once, then remove Proemia with Windows Settings > Apps (or delete
+the portable Proemia folder). Don't use Proemia's own "Uninstall Proemia..." button: it would also
+erase saved keys Callio still reads from it.
+
+First time:
+1. Keep Callio.exe and callio-office.exe together in one folder
+   (e.g. C:\Tools\Callio). callio-office.exe opens Word documents, spreadsheets, presentations and pictures and
+   runs the PDF tools; it starts only when needed and closes with Callio.
+2. Double-click Callio.exe. On first launch it adds itself to "Open with" for
+   .md .markdown .tex .ltx .sty .cls .bib .pdf, Word documents (.docx .doc .odt .rtf) and
+   spreadsheets (.xlsx .xlsm .xls .xlsb .ods), tables (.csv .tsv) and presentations
+   (.pptx .ppsx .potx .odp) — current user only, no admin rights.
+3. To make it the default: right-click a file > Open with > Choose another app > Callio >
+   tick "Always". Or use Settings > File types > Open Windows Default apps.
+
+Updating later: double-click the new Callio.exe; it offers to update your older copy in place.
+Settings live in %APPDATA%\dev.callio.editor, so nothing is lost.
+
+The Edge extension was renamed too: remove "Proemia" in Edge > Extensions and load the new
+Callio-Edge-Extension folder (Developer mode > Load unpacked).
+
+Removing Callio completely: Settings > About > Uninstall Callio… (removes Open with/default
+entries, saved keys, settings, library, memory and the program; never your documents).
+
+Windows SmartScreen may warn because the exe isn't code-signed: More info > Run anyway.
+
+New in 0.11.0:
+- New name and look: Callio, in the logo's forest green and gold (light and dark), with a
+  redesigned Settings window, one consistent icon set, tidier menus and smoother animations.
+- Settings and data move over from Proemia automatically.
+
+Earlier, in 0.10.0:
+- Pictures and photos (JPEG, PNG, TIFF, WebP, AVIF, HEIC, JPEG XL, BMP, GIF, PSD, camera raw)
+  open in a photo editor built on LightCraft: a full ribbon (Home, Crop & Geometry, Masking,
+  Retouch, Adjust, Before / After, All Commands), a live histogram and every adjustment panel
+  (Light, Tone Curve, Color, Color Mixer, B&W, Color Grading, Effects, Vignette, Grain, Detail,
+  Lens, Transform, Profile, Calibration). Sliders update the picture while you drag.
+- Crop, straighten, rotate, flip, upright; brush / gradient / colour / luminance masks;
+  heal, clone, dust spots, red eye; presets and profiles; copy / paste settings.
+- Ctrl+S saves the edited picture (the previous file goes to Callio's backups); Export saves a
+  copy as JPEG, PNG, 16-bit TIFF, WebP, AVIF or JPEG XL. Raw files are never changed: their
+  edits go into an .xmp sidecar, or Save as JPEG / TIFF. Every change is one Undo step.
+- Split view: CSV / TSV tables and JSON / XML / YAML trees now scroll together with the text.
+- The AI can edit pictures (image_edit).
+
+In 0.9.0:
+- JSON, XML, YAML: Beautify (Shift+Alt+F), Minify, Validate, a live check in the status bar,
+  coloured brackets, indentation guides, folding, and a tree preview.
+- Status bar: indentation (2 / 4 spaces / tabs, convert), line endings (CRLF / LF / CR) and
+  encodings (ANSI, UTF-8, UTF-8-BOM, UTF-16, every character set; reopen or convert).
+- CSV / TSV open as an editable table (Split shows the text too); saved as the same CSV/TSV.
+- Compare (toolbar): two files or two folders, picked or dropped from Explorer.

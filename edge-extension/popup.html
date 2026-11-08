@@ -1,0 +1,25 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="popup.css"></head>
+<body>
+  <header><img src="icons/icon32.png" alt=""><b>Save to Callio</b></header>
+  <div id="state" class="note">Looking for Callio…</div>
+  <section id="pair" hidden>
+    <p>Connect this browser to Callio once. Callio will ask you to confirm.</p>
+    <button id="pair-btn" class="primary">Connect to Callio</button>
+  </section>
+  <form id="form" hidden>
+    <label>Title<textarea id="title" rows="2"></textarea></label>
+    <label>Authors <small>(one per line)</small><textarea id="authors" rows="2"></textarea></label>
+    <div class="row">
+      <label>Year<input id="year" inputmode="numeric"></label>
+      <label class="grow">DOI<input id="doi" spellcheck="false"></label>
+    </div>
+    <label>Collection<select id="collection"><option value="">(no collection)</option></select></label>
+    <label>Tags <small>(comma-separated)</small><input id="tags"></label>
+    <div id="pdfinfo" class="note"></div>
+    <div id="dup" class="warn" hidden></div>
+    <button type="submit" id="save" class="primary">Save to Callio</button>
+  </form>
+  <div id="result" hidden></div>
+  <script src="popup.js"></script>
+</body></html>

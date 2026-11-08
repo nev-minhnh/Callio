@@ -29,6 +29,11 @@ Editor and preview (JavaScript)
     Original Code: citeproc-js, Copyright (c) 2009-2025 Frank Bennett.
     https://github.com/Juris-M/citeproc-js
 
+Citation styles
+  The CSL styles in src/csl and src/csl-styles.json come from the Citation Style Language
+  project (https://citationstyles.org) and are licensed under CC BY-SA 3.0; each file
+  names its authors.
+
 Rust crates
   The full list of Rust dependencies and their licenses is in office/Cargo.lock and
   src-tauri/Cargo.lock; `cargo about` or `cargo license` prints it. They are licensed

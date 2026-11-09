@@ -8,9 +8,10 @@ the portable Proemia folder). Don't use Proemia's own "Uninstall Proemia..." but
 erase saved keys Callio still reads from it.
 
 First time:
-1. Keep Callio.exe and callio-office.exe together in one folder
+1. Keep Callio.exe, callio-office.exe and drawio.zip together in one folder
    (e.g. C:\Tools\Callio). callio-office.exe opens Word documents, spreadsheets, presentations and pictures and
-   runs the PDF tools; it starts only when needed and closes with Callio.
+   runs the PDF tools; it starts only when needed and closes with Callio. drawio.zip is the
+   draw.io diagram editor (.drawio files).
 2. Double-click Callio.exe. On first launch it adds itself to "Open with" for
    .md .markdown .tex .ltx .sty .cls .bib .pdf, Word documents (.docx .doc .odt .rtf) and
    spreadsheets (.xlsx .xlsm .xls .xlsb .ods), tables (.csv .tsv) and presentations

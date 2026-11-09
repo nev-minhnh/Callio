@@ -383,7 +383,9 @@ export async function installClaude(logEl) {
   await ccStatus(true);
 }
 
-export async function renderCCSettings() {
+let ccChanged = null;
+export async function renderCCSettings(changed) {
+  if (changed) ccChanged = changed;
   const box = $("#cc-settings");
   if (!box) return;
   box.innerHTML = `<p class="note">Checking Claude Code…</p>`;
@@ -391,7 +393,7 @@ export async function renderCCSettings() {
   const authLabel = s.loggedIn ? ({ "claude.ai": "your Claude plan", oauth_token: "a Claude token", api_key: "an API key", third_party: "a cloud provider" }[s.auth?.authMethod] || "signed in") : "not signed in";
   const who = s.auth?.email || s.auth?.account?.email || "";
   box.innerHTML = `
-    <label class="check"><input type="checkbox" id="cc-enable" ${settings.ccEnabled ? "checked" : ""}> Use Claude Code in the AI panel (works with a Claude Pro or Max plan, no API key)</label>
+    <label class="check"><input type="checkbox" id="cc-enable" ${settings.ccEnabled ? "checked" : ""}> Use Claude Code (works with a Claude Pro or Max plan, no API key)</label>
     <div class="cc-status ${s.installed && s.loggedIn ? "ok" : ""}">
       ${!s.installed ? `<span>Claude Code isn't installed.</span><button type="button" class="primary small" id="cc-install">Install Claude Code</button>`
         : `<span>Claude Code ${esc((s.version || "").replace(/\s*\(.*\)/, ""))} — ${s.loggedIn ? "signed in with " : ""}<b>${esc(authLabel)}</b>${who ? ` (${esc(who)})` : ""}</span>
@@ -406,6 +408,7 @@ export async function renderCCSettings() {
   box.querySelector("#cc-enable").onchange = (e) => {
     updateSettings({ ccEnabled: e.target.checked, ...(e.target.checked && !settings.aiModel_chat ? { aiModel_chat: "claudecode|default" } : {}) });
     import("./ai.js").then((m) => { m.refreshModelSelect(); m.refreshRoleSelects(); });
+    ccChanged?.();
   };
   box.querySelector("#cc-mode").value = settings.ccPermissionMode || "default";
   box.querySelector("#cc-mode").onchange = async (e) => {

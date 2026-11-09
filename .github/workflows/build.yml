@@ -41,6 +41,20 @@ jobs:
       - name: Install JavaScript packages
         run: npm ci
 
+      - name: Fetch and pack the draw.io editor
+        shell: bash
+        run: |
+          source scripts/drawio.env
+          git init -q drawio-src && cd drawio-src
+          git remote add origin https://github.com/jgraph/drawio.git
+          git config core.sparseCheckout true
+          echo "src/main/webapp/" > .git/info/sparse-checkout
+          git fetch -q --depth 1 --filter=blob:none origin "$DRAWIO_COMMIT"
+          git checkout -q FETCH_HEAD
+          cd ..
+          mkdir -p vendor
+          node scripts/build-drawio.mjs drawio-src/src/main/webapp vendor/drawio.zip
+
       - name: Build the office engine (Word, Excel, PowerPoint, PDF, pictures)
         run: cargo build --release --locked --manifest-path office/Cargo.toml
 
@@ -61,7 +75,7 @@ jobs:
           $out = "out"
           $port = "$out/Callio-portable"
           New-Item -ItemType Directory -Force $port | Out-Null
-          Copy-Item src-tauri/target/release/Callio.exe, office/bin/callio-office.exe $port/
+          Copy-Item src-tauri/target/release/Callio.exe, office/bin/callio-office.exe, vendor/drawio.zip $port/
           if (Test-Path src-tauri/target/release/WebView2Loader.dll) { Copy-Item src-tauri/target/release/WebView2Loader.dll $port/ }
           (Get-Content packaging/READ-ME.txt -Raw).Replace('{{VERSION}}', $v) | Set-Content -NoNewline -Encoding utf8 "$port/READ-ME.txt"
           Compress-Archive -Path "$port/*" -DestinationPath "$out/Callio-$v-portable.zip" -CompressionLevel Optimal
@@ -98,7 +112,7 @@ jobs:
           if ($start) {
             for ($i = $start; $i -lt $lines.Count -and $lines[$i] -notmatch '^## '; $i++) { $body += $lines[$i] }
           }
-          $body += @("", "**Downloads**", "- ``Callio-$v-setup.zip`` — the installer (per-user, no admin rights).", "- ``Callio-$v-portable.zip`` — unzip anywhere and run ``Callio.exe`` (keep ``callio-office.exe`` next to it).", "", "Windows SmartScreen may warn because the exe isn't code-signed: More info → Run anyway.")
+          $body += @("", "**Downloads**", "- ``Callio-$v-setup.zip`` — the installer (per-user, no admin rights).", "- ``Callio-$v-portable.zip`` — unzip anywhere and run ``Callio.exe`` (keep ``callio-office.exe`` and ``drawio.zip`` next to it).", "", "Windows SmartScreen may warn because the exe isn't code-signed: More info → Run anyway.")
           $body -join "`n" | Set-Content -Encoding utf8 out/RELEASE.md
 
       # A push to main publishes (or refreshes) the release of the version in package.json; the

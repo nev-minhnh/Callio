@@ -33,6 +33,7 @@
             <div class="menu-h">Slides, diagrams and more</div>
             <button role="menuitem" data-new="pptx"><span class="fb deck">PPTX</span><span>PowerPoint presentation</span><kbd></kbd></button>
             <button role="menuitem" data-new="html"><span class="fb code">HTML</span><span>HTML page</span><kbd></kbd></button>
+            <button role="menuitem" data-new="drawio"><span class="fb diagram">DRAW</span><span>draw.io diagram</span><kbd></kbd></button>
             <button role="menuitem" data-new="mmd"><span class="fb diagram">MMD</span><span>Mermaid diagram</span><kbd></kbd></button>
             <button role="menuitem" data-new="ipynb"><span class="fb code">NB</span><span>Jupyter notebook</span><kbd></kbd></button>
             <button role="menuitem" data-new="bib"><span class="fb bib">BIB</span><span>BibTeX library</span><kbd></kbd></button>
@@ -362,18 +363,22 @@
         </div>
         <div class="settings-pages">
           <section data-sec="editor">
+            <h3 class="set-h">Interface</h3>
             <label>Language <select name="uiLang" data-noi18n><option value="en">English</option><option value="vi">Tiếng Việt</option></select></label>
             <label>Theme <select name="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+            <h3 class="set-h">Text editor</h3>
             <label>Font size <input name="fontSize" type="number" min="9" max="32" /></label>
-            <label>Editor font <input name="fontFamily" type="text" /></label>
+            <label>Editor font <input name="fontFamily" type="text" placeholder="Default" /></label>
+            <label>Tab size <input name="tabSize" type="number" min="1" max="8" /></label>
             <label class="check"><input name="wordWrap" type="checkbox" /> Wrap long lines</label>
             <label class="check"><input name="lineNumbers" type="checkbox" /> Line numbers</label>
             <label class="check"><input name="spellcheck" type="checkbox" /> Spell check (Windows dictionary)</label>
+            <h3 class="set-h">Saving and preview</h3>
             <label class="check"><input name="autoSave" type="checkbox" /> Auto-save after typing stops</label>
             <label class="check"><input name="syncScroll" type="checkbox" /> Scroll the editor and the preview together (Markdown and LaTeX)</label>
-            <label>Tab size <input name="tabSize" type="number" min="1" max="8" /></label>
           </section>
           <section data-sec="latex" hidden>
+            <h3 class="set-h">Engine</h3>
             <label>Engine
               <select name="engine">
                 <option value="tectonic">Tectonic (bundled download, no TeX install needed)</option>
@@ -383,6 +388,9 @@
                 <option value="lualatex">LuaLaTeX</option>
                 <option value="overleaf">Overleaf servers (needs linked project)</option>
               </select>
+            </label>
+            <label>latexmk flavour
+              <select name="latexmkFlavor"><option value="pdf">pdfLaTeX</option><option value="xelatex">XeLaTeX</option><option value="lualatex">LuaLaTeX</option></select>
             </label>
             <div class="engine-cards">
               <div class="engine-card" data-engine="tectonic">
@@ -394,40 +402,35 @@
                 <div class="ec-actions"><button type="button" class="ec-install">Install</button><button type="button" class="ec-remove" hidden>Remove</button></div>
               </div>
             </div>
-            <label class="check"><input name="autoInstallPackages" type="checkbox" /> Install missing LaTeX packages automatically while compiling (TinyTeX)</label>
-            <label>latexmk flavour
-              <select name="latexmkFlavor"><option value="pdf">pdfLaTeX</option><option value="xelatex">XeLaTeX</option><option value="lualatex">LuaLaTeX</option></select>
-            </label>
+            <h3 class="set-h">Compiling</h3>
             <label>Auto-compile
               <select name="autoCompile"><option value="off">Off</option><option value="save">On save</option><option value="idle">After typing stops</option></select>
             </label>
+            <label class="check"><input name="autoInstallPackages" type="checkbox" /> Install missing LaTeX packages automatically while compiling (TinyTeX)</label>
             <label class="check"><input name="shellEscape" type="checkbox" /> Allow shell escape (needed for minted; only for trusted documents)</label>
             <label>Custom TeX bin folder (optional) <input name="texBin" type="text" placeholder="e.g. C:\texlive\2026\bin\windows" /></label>
           </section>
           <section data-sec="overleaf" hidden>
+            <h3 class="set-h">Server</h3>
             <label>Overleaf server <input name="overleafUrl" type="text" placeholder="https://www.overleaf.com" /></label>
             <label>Sync method
               <select name="overleafMode"><option value="auto">Auto (Git when a token is set, else web)</option><option value="git">Git only</option><option value="web">Web only</option></select>
             </label>
-            <fieldset>
-              <legend>Git integration (official)</legend>
-              <p class="note">Create a token in Overleaf → Account Settings → Git integration. Stored in Windows Credential Manager. Requires <a href="#" data-url="https://git-scm.com/download/win">Git for Windows</a>.</p>
-              <label>Git token <input id="ol-token" type="password" autocomplete="off" placeholder="olp_…" /></label>
-            </fieldset>
-            <fieldset>
-              <legend>Overleaf account (project list, web sync, Overleaf compiles)</legend>
-              <p class="note">Sign in once in Callio's Overleaf window (email, Google, ORCID or your institution). Callio keeps the session fresh by itself and renews it automatically when it expires.</p>
-              <div class="row">
-                <button type="button" id="btn-ol-signin" class="primary">Sign in to Overleaf</button>
-                <button type="button" id="btn-ol-test">Check connection</button>
-                <button type="button" id="btn-ol-signout">Sign out</button>
-              </div>
-              <span id="ol-test-result" class="note"></span>
-              <details class="adv"><summary>Advanced: paste a session cookie manually</summary>
-                <p class="note">Only if the sign-in window can't be used: copy <code>overleaf_session2</code> from your browser's DevTools → Application → Cookies.</p>
-                <label>Session cookie <input id="ol-cookie" type="password" autocomplete="off" placeholder="s%3A…" /></label>
-              </details>
-            </fieldset>
+            <h3 class="set-h">Overleaf account</h3>
+            <p class="note">Sign in once in Callio's Overleaf window (email, Google, ORCID or your institution). Callio keeps the session fresh by itself and renews it automatically when it expires. Used for the project list, web sync and Overleaf compiles.</p>
+            <div class="row">
+              <button type="button" id="btn-ol-signin" class="primary">Sign in to Overleaf</button>
+              <button type="button" id="btn-ol-test">Check connection</button>
+              <button type="button" id="btn-ol-signout">Sign out</button>
+            </div>
+            <span id="ol-test-result" class="note"></span>
+            <details class="adv"><summary>Advanced: paste a session cookie manually</summary>
+              <p class="note">Only if the sign-in window can't be used: copy <code>overleaf_session2</code> from your browser's DevTools → Application → Cookies.</p>
+              <label>Session cookie <input id="ol-cookie" type="password" autocomplete="off" placeholder="s%3A…" /></label>
+            </details>
+            <h3 class="set-h">Git integration (official)</h3>
+            <p class="note">Create a token in Overleaf → Account Settings → Git integration. Stored in Windows Credential Manager. Requires <a href="#" data-url="https://git-scm.com/download/win">Git for Windows</a>.</p>
+            <label>Git token <input id="ol-token" type="password" autocomplete="off" placeholder="olp_…" /></label>
           </section>
           <section data-sec="ai" hidden>
             <div id="ai-settings"></div>
@@ -439,24 +442,27 @@
             <div id="ocr-settings"></div>
           </section>
           <section data-sec="files" hidden>
-            <p>Register Callio in Windows <b>Open with…</b> for these file types (current user, no admin rights needed):</p>
-            <p class="mono" id="assoc-exts"></p>
+            <h3 class="set-h">Open with</h3>
+            <p class="note">Register Callio in Windows <b>Open with…</b> for these file types (current user, no admin rights needed):</p>
+            <p class="mono ext-list" id="assoc-exts"></p>
             <div class="row">
               <button type="button" id="btn-assoc-register" class="primary">Register file types</button>
               <button type="button" id="btn-assoc-unregister">Remove</button>
             </div>
             <p class="note" id="assoc-status"></p>
+            <h3 class="set-h">Default app</h3>
             <p class="note">Windows 11 only lets you pick the default app yourself. After registering, click below and choose Callio for .md and .tex, or right-click a file → Open with → Choose another app → Callio → <b>Always</b>.</p>
-            <button type="button" id="btn-default-apps">Open Windows Default apps</button>
+            <div class="row"><button type="button" id="btn-default-apps">Open Windows Default apps</button></div>
           </section>
           <section data-sec="about" hidden>
-            <div class="about-hero"><img src="/callio-logo.png" alt="" draggable="false" /><div><h3>Callio <span id="about-version"></span></h3><p class="about-slogan">Shape your folio</p></div></div>
-            <p>A lightweight editor for Markdown, LaTeX, Word documents, spreadsheets, presentations, PDF and pictures. Built with Rust (Tauri), CodeMirror, KaTeX, PDF.js and Callio's own engines for documents, spreadsheets, presentations, PDF and pictures.</p>
+            <div class="about-hero set-intro"><img src="/callio-logo.png" alt="" draggable="false" /><div><h3>Callio <span id="about-version"></span></h3><p class="about-slogan">Shape your folio</p></div></div>
+            <h3 class="set-h">About Callio</h3>
+            <p>A lightweight editor for Markdown, LaTeX, Word documents, spreadsheets, presentations, PDF, pictures and draw.io diagrams. Built with Rust (Tauri), CodeMirror, KaTeX, PDF.js, draw.io and Callio's own engines for documents, spreadsheets, presentations, PDF and pictures.</p>
             <p class="note">Open source under the MIT or Apache-2.0 licence · <a href="#" data-url="https://github.com/nev-minhnh/Callio">github.com/nev-minhnh/Callio</a></p>
             <p class="note">Settings: <span class="mono" id="about-paths"></span></p>
-            <h4>Uninstall</h4>
+            <h3 class="set-h">Uninstall</h3>
             <p class="note">Removes Callio completely: “Open with” and default-app entries, saved keys and sign-ins, settings, AI memory, history, the paper library, the TinyTeX it installed, skills it copied to Claude Code, and the program itself. Your own documents are never touched.</p>
-            <button type="button" id="btn-uninstall" class="danger">Uninstall Callio…</button>
+            <div class="row"><button type="button" id="btn-uninstall" class="danger">Uninstall Callio…</button></div>
           </section>
         </div>
       </div>

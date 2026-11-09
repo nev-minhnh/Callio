@@ -188,7 +188,7 @@ export function ask({ title, text = "", input, password = false, vertical = fals
 
 // ---------------- tabs ----------------
 /** Tabs without a text editor: shown by the PDF viewer or the spreadsheet grid. */
-const VIEW_KINDS = new Set(["pdf", "doc", "sheet", "deck", "image", "media"]);
+const VIEW_KINDS = new Set(["pdf", "doc", "sheet", "deck", "image", "media", "drawio"]);
 let tabs = [];
 let activeId = null;
 let nextId = 1;
@@ -432,6 +432,7 @@ export async function activate(id) {
   $("#app").classList.toggle("deck-mode", t.kind === "deck");
   $("#app").classList.toggle("image-mode", t.kind === "image");
   $("#app").classList.toggle("media-mode", t.kind === "media");
+  $("#app").classList.toggle("drawio-mode", t.kind === "drawio");
   $("#app").classList.toggle("nb-mode", t.kind === "ipynb" && !t.nbRaw);
   if (!isPdf) {
     t.state = refreshExtraExtensions(refreshStateOptions(t.state, t.indent), t.kind);
@@ -446,7 +447,7 @@ export async function activate(id) {
   highlightTree();
   if (!$("#side-history").hidden) refreshHistoryPanel();
   $("#st-path").textContent = t.path || "Unsaved file";
-  $("#st-kind").textContent = { tex: "LaTeX", md: "Markdown", bib: "BibTeX", text: languageName(t), pdf: "PDF", ipynb: "Jupyter notebook", doc: "Word document", sheet: "Spreadsheet", deck: "Presentation", image: "Picture", mermaid: "Mermaid diagram", html: "HTML", media: "Media", json: "JSON", xml: "XML", yaml: "YAML", csv: t.delim === "\t" ? "TSV" : "CSV" }[t.kind];
+  $("#st-kind").textContent = { tex: "LaTeX", md: "Markdown", bib: "BibTeX", text: languageName(t), pdf: "PDF", ipynb: "Jupyter notebook", doc: "Word document", sheet: "Spreadsheet", deck: "Presentation", image: "Picture", drawio: "draw.io diagram", mermaid: "Mermaid diagram", html: "HTML", media: "Media", json: "JSON", xml: "XML", yaml: "YAML", csv: t.delim === "\t" ? "TSV" : "CSV" }[t.kind];
   $("#app").classList.toggle("kind-csv", t.kind === "csv");
   $("#app").classList.toggle("kind-struct", ["json", "xml", "yaml"].includes(t.kind));
   // CSV/TSV open as a table; other files use the chosen view
@@ -466,17 +467,34 @@ export async function activate(id) {
   if (t.kind !== "deck") import("./deck.js").then((m) => m.hideDeck());
   if (t.kind !== "image") { import("./image.js").then((m) => m.hideImage()); import("./viewer.js").then((m) => m.hidePreview()); }
   if (t.kind !== "media") import("./media.js").then((m) => m.hideMedia());
+  if (t.kind !== "drawio") import("./drawio.js").then((m) => m.hideDrawio());
   settle($("#editor-pane")); settle($("#preview-pane"));
   if (t.kind === "sheet") await showSheetTab(t);
   else if (t.kind === "doc") { (await import("./sheet.js")).hideSheet(); await showWordTab(t); }
   else if (t.kind === "deck") { (await import("./sheet.js")).hideSheet(); await showDeckTab(t); }
   else if (t.kind === "image") { (await import("./sheet.js")).hideSheet(); await showImageTab(t); }
   else if (t.kind === "media") { (await import("./sheet.js")).hideSheet(); await showMediaTab(t); }
+  else if (t.kind === "drawio") { (await import("./sheet.js")).hideSheet(); await showDrawioTab(t); }
   else if (isPdf) { (await import("./sheet.js")).hideSheet(); await showPdfTab(t); }
   refreshUndo();
 }
 
 window.addEventListener("callio-image-preview", () => { const t = activeTab(); if (t?.kind === "image") { t.imgEdit = false; import("./viewer.js").then((v) => v.forgetPreview(t)); showImageTab(t); } });
+async function showDrawioTab(t) {
+  const m = await import("./drawio.js");
+  const h = m.drawioHost();
+  if (!h.isConnected) $("#preview-pane").appendChild(h);
+  $("#pdf-wrap").hidden = true;
+  try { await m.showDrawio(t); }
+  catch (e) { status(`Couldn't open ${t.name}: ${e.message}`, "err"); }
+}
+/** A tab's file was saved under a new name (Save As from a viewer). */
+export function tabRenamed(t) {
+  renderTabs();
+  if (t.id === activeId) { $("#st-path").textContent = t.path || "Unsaved file"; highlightTree(); }
+  if (t.path) addRecent(t.path);
+  if (folder) refreshTree().catch(() => {});
+}
 async function showMediaTab(t) {
   const m = await import("./media.js");
   const h = m.mediaHost();
@@ -614,7 +632,7 @@ export async function openPath(path, line) {
     return null;
   }
   const k = cat === "video" || cat === "audio" ? "media" : kindOf(path);
-  if (k === "pdf" || k === "doc" || k === "sheet" || k === "deck" || k === "image" || k === "media") {
+  if (k === "pdf" || k === "doc" || k === "sheet" || k === "deck" || k === "image" || k === "media" || k === "drawio") {
     const t = newTab({ path, kind: k });
     t.pinned = wasPinned(path);
     t.mtime = await api.fileMtime(path).catch(() => 0);
@@ -712,6 +730,7 @@ async function closeTab(id) {
   if (t.kind === "deck") import("./deck.js").then((m) => m.closeDeck(t));
   if (t.kind === "image") { import("./image.js").then((m) => m.closeImage(t)); import("./viewer.js").then((m) => m.forgetPreview(t)); }
   if (t.kind === "media") import("./media.js").then((m) => m.closeMedia(t));
+  if (t.kind === "drawio") import("./drawio.js").then((m) => m.closeDrawio(t));
   await tabOut($(`#tabs .tab[data-id="${id}"]`));
   const i = tabs.indexOf(t);
   if (i < 0) return;
@@ -732,6 +751,7 @@ async function saveTab(t, saveAs = false) {
   if (t.kind === "doc") return (await import("./word.js")).saveWord(t, saveAs);
   if (t.kind === "deck") return (await import("./deck.js")).saveDeck(t, saveAs);
   if (t.kind === "image") return (await import("./image.js")).saveImage(t, saveAs);
+  if (t.kind === "drawio") return (await import("./drawio.js")).saveDrawio(t, saveAs);
   if (t.id === activeId) stashActive();
   let path = t.path;
   if (!path || saveAs) {
@@ -2373,6 +2393,24 @@ async function newFile(kind) {
       if (!isFolder) await openPath(p);
       revealInTree(p, true);
     } catch (er) { toast(er.message || String(er), "err"); }
+    return;
+  }
+  // a draw.io diagram: a real file in the open folder (or an unsaved tab without one)
+  if (kind === "drawio") {
+    const { blankDiagram } = await import("./drawio.js");
+    if (!folder) {
+      const t = newTab({ kind: "drawio", name: `Untitled-${++untitledN}.drawio` });
+      t.newXml = blankDiagram();
+      await activate(t.id); renderTabs();
+      return;
+    }
+    const path = await freeName(folder, "Diagram", "drawio");
+    try {
+      await api.writeText(path, blankDiagram(), "utf8", 0);
+      await refreshTree();
+      await openPath(path);
+      revealInTree(path, true);
+    } catch (e) { toast(`Couldn't create ${basename(path)}: ${e.message || e}`, "err"); }
     return;
   }
   // Word, Excel and PowerPoint: a real (blank) file is made first, then opened

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.14.0
+
+- **draw.io diagrams.** `.drawio`, `.dio`, `.drawio.svg` and `.drawio.png` files open in the full draw.io editor — its menus (File, Edit, View, Arrange, Extras, Help), toolbar, shape libraries and *More Shapes*, format panel, pages, layers, layouts, templates, find, math and export (PNG, JPEG, WebP, SVG, PDF, HTML, XML, animated GIF…). Everything runs from the copy shipped with Callio (`drawio.zip`, next to Callio.exe); nothing comes from the internet. Ctrl+S (or draw.io's *Save*) saves the file; unsaved changes show ● on the tab; *Export as…* asks where to save. **New ▾ → draw.io diagram** makes a new one. draw.io follows Callio's theme and language.
+- **Settings, redesigned.** Every page uses the same layout: titled groups, one row per setting with its name on the left and its control on the right, and switches for on/off settings.
+  - **AI** has four tabs — *Providers*, *Models*, *Internet*, *Skills*.
+  - **Providers** is a scrolling list (Claude Code is now one of them, at the top) with the chosen provider's settings under it, instead of every provider always expanded.
+  - **Models** are grouped by AI function: *Chat and agents*, *Writing* (writing assistant, rewrites / Ask AI / Fix with AI, inline completion), *Translation and dictionary*, *Research and library* (summaries, paper details — now its own choice).
+  - **Skills**: installed skills are a scrolling list with a filter.
+- **Vietnamese interface everywhere**: menus, ribbons, dialogs, messages, the writing assistant, the library, the photo editor, Compare and the new settings (about 2,100 phrases), and draw.io in Vietnamese too.
+
 ## 0.13.0
 
 - **Vietnamese interface.** Settings → Editor → *Language*: English or Tiếng Việt (Vietnamese is chosen on first start when Windows is in Vietnamese). It switches at once, without restarting — menus, toolbars, dialogs, panels, tooltips and messages; your documents, file names and AI answers are never changed. The writing assistant's explanations follow the same language.

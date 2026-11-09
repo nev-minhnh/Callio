@@ -1182,108 +1182,130 @@ export async function verifyBib(path) {
 }
 
 // ---------------- settings page ----------------
+// Four tabs: Providers (a list — Claude Code and the API providers — with the chosen one's
+// settings under it), Models (one model per AI function, grouped), Internet and Skills.
+let aiTab = "providers", provSel = null;
+const ROLE_GROUPS = [
+  ["Chat and agents", "The AI panel, Claude Code and the tools it runs.", [["chat", "Chat panel"]], ["aiEffort", "aiThinking", "aiMemory"]],
+  ["Writing", "The writing assistant, rewrites and completion as you type.", [["write", "Writing assistant (grammar, style, tone)"], ["edit", "Rewrites, Ask AI and Fix with AI"], ["inline", "Inline completion"]], ["aiInlineEnabled", "aiInlineDelay"]],
+  ["Translation and dictionary", "The Translate and Look up popups (right-click, double-click).", [["translate", "Translation (AI)"]], []],
+  ["Research and library", "Summaries of long chats and the details of papers in your library.", [["summary", "Summaries (long chats, /brief) — a small, cheap model is enough"], ["library", "Paper details (library)"]], ["libAiDetails"]],
+];
+const PLAIN = {
+  aiEffort: () => `<label>Effort for Claude models <select name="aiEffort"><option value="">Model default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra</option><option value="max">Max — 4× or more usage</option></select></label>`,
+  aiThinking: () => `<label class="check"><input type="checkbox" name="aiThinking" ${settings.aiThinking !== false ? "checked" : ""}> Show the model's thinking live while it works</label>`,
+  aiMemory: () => `<label class="check"><input type="checkbox" name="aiMemory" ${settings.aiMemory !== false ? "checked" : ""}> Remember conversations per project folder (/memory to see or forget)</label>`,
+  aiInlineEnabled: () => `<label class="check"><input type="checkbox" name="aiInlineEnabled" ${settings.aiInlineEnabled ? "checked" : ""}> Inline completion while typing (ghost text, Tab to accept)</label>`,
+  aiInlineDelay: () => `<label>Inline completion delay (ms) <input type="number" name="aiInlineDelay" min="200" max="5000" value="${settings.aiInlineDelay || 700}"></label>`,
+  libAiDetails: () => `<label class="check"><input type="checkbox" name="libAiDetails" ${settings.libAiDetails !== false ? "checked" : ""}> Find missing paper details with AI and the internet</label>`,
+};
+function provMeta(id) {
+  if (id === "claudecode") return settings.ccEnabled ? "On" : "Off";
+  const c = provCfg(id);
+  if (!c.enabled) return "Off";
+  return c.models?.length ? `On · ${c.models.length} models` : "On";
+}
+const provOn = (id) => (id === "claudecode" ? !!settings.ccEnabled : !!provCfg(id).enabled);
+
 export function renderAISettings() {
   const box = $("#ai-settings");
   const searchKeyName = `search-key-${settings.aiSearchBackend || "none"}`;
+  const rows = [{ id: "claudecode", name: "Claude Code", sub: "Your Claude Pro or Max plan — no API key" }, ...PRESETS.map((p) => ({ id: p.id, name: p.name, sub: p.optionalKey ? "Your own server" : "API key" }))];
+  if (!provSel || !rows.some((r) => r.id === provSel)) provSel = rows.find((r) => provOn(r.id))?.id || "claudecode";
   box.innerHTML = `
-    <h3 class="set-h">Providers</h3>
-    <p class="note">Keys are stored in Windows Credential Manager. Requests go directly from your PC to the provider.</p>
-    <div class="prov-list">${PRESETS.map((p) => `
-      <div class="prov ${provCfg(p.id).enabled ? "on" : ""}" data-p="${p.id}">
-        <label class="check prov-name"><input type="checkbox" class="p-en" ${provCfg(p.id).enabled ? "checked" : ""}> <b>${esc(p.name)}</b></label>
-        <div class="prov-body">
-          <label>Base URL <input class="p-url" type="text" value="${esc(provCfg(p.id).baseUrl || p.baseUrl)}" placeholder="https://…/v1"></label>
-          <label>API key${p.optionalKey ? " (optional)" : ""} <input class="p-key" type="password" autocomplete="off" placeholder="${p.keyUrl ? "Paste key" : "Leave empty if your server has no key"}"></label>
-          <div class="row">
-            <button type="button" class="p-models">Load models</button>
-            ${p.keyUrl ? `<a href="#" data-url="${p.keyUrl}">Get a key ↗</a>` : ""}
-            <span class="p-status note">${(provCfg(p.id).models || []).length ? `${provCfg(p.id).models.length} models` : ""}</span>
-          </div>
-          <label>Add a model by name <input class="p-addmodel" type="text" placeholder="e.g. a model id the list doesn't show"></label>
+    <div class="set-tabs" role="tablist">
+      ${[["providers", "Providers"], ["models", "Models"], ["internet", "Internet"], ["skills", "Skills"]].map(([k, l]) => `<button type="button" role="tab" data-tab="${k}" class="${aiTab === k ? "on" : ""}">${l}</button>`).join("")}
+    </div>
+    <div class="ai-pane" data-pane="providers" ${aiTab === "providers" ? "" : "hidden"}>
+      <p class="note set-intro">Choose a provider to set it up. Keys are stored in Windows Credential Manager; requests go directly from your PC to the provider.</p>
+      <div class="pick-list prov-pick" role="listbox">${rows.map((r) => `
+        <button type="button" class="pl-row${r.id === provSel ? " on" : ""}" data-p="${r.id}" role="option" aria-selected="${r.id === provSel}">
+          <span class="pl-dot ${provOn(r.id) ? "ok" : ""}"></span><span class="pl-main"><b>${esc(r.name)}</b><small>${esc(r.sub)}</small></span><span class="pl-meta">${esc(provMeta(r.id))}</span>${ic("chevron-right")}
+        </button>`).join("")}
+      </div>
+      <div class="prov-detail"></div>
+    </div>
+    <div class="ai-pane" data-pane="models" ${aiTab === "models" ? "" : "hidden"}>
+      <p class="note set-intro">Pick the model each AI function uses. “Same as chat” follows the Chat panel model.</p>
+      ${ROLE_GROUPS.map(([title, note, roles, extra]) => `
+        <div class="sg"><h3 class="set-h sg-h">${title}</h3><p class="note">${note}</p>
+          ${roles.map(([r, l]) => `<label>${l} <select class="m-role" data-role="${r}"></select></label>`).join("")}
+          ${extra.map((k) => PLAIN[k]()).join("")}
+        </div>`).join("")}
+    </div>
+    <div class="ai-pane" data-pane="internet" ${aiTab === "internet" ? "" : "hidden"}>
+      <div class="sg"><h3 class="set-h sg-h">Internet access</h3>
+        <label class="check"><input type="checkbox" name="aiWeb" ${settings.aiWeb !== false ? "checked" : ""}> Let the AI use the internet (search papers, verify citations, read pages)</label>
+        <p class="note">Pick the search engine (Google, Cốc Cốc, Bing, DuckDuckGo, Google Scholar, Semantic Scholar, arXiv, PubMed…) from the chat's toolbar, next to the globe. Engines are read from their own results pages, like in your browser; no key is needed.</p>
+      </div>
+      <div class="sg"><h3 class="set-h sg-h">Automatic search</h3>
+        <p class="note">Used when the chat's engine is set to Automatic.</p>
+        <label>Automatic web search uses
+          <select name="aiSearchBackend">
+            <option value="none">The model's own search (Claude), otherwise Google</option>
+            <option value="brave">Brave Search API</option>
+            <option value="tavily">Tavily</option>
+            <option value="searxng">SearXNG (your server)</option>
+          </select></label>
+        <label class="s-url" ${settings.aiSearchBackend === "searxng" ? "" : "hidden"}>SearXNG URL <input name="aiSearchUrl" type="text" value="${esc(settings.aiSearchUrl || "")}" placeholder="http://localhost:8888"></label>
+        <label class="s-key" ${["brave", "tavily"].includes(settings.aiSearchBackend) ? "" : "hidden"}>Search API key <input id="search-key" type="password" autocomplete="off"></label>
+        <p class="note">Paper search and citation checks (OpenAlex, Crossref, doi.org) are free and need no key.</p>
+      </div>
+    </div>
+    <div class="ai-pane" data-pane="skills" ${aiTab === "skills" ? "" : "hidden"}>
+      <div class="sg"><h3 class="set-h sg-h">Skill folders</h3>
+        <label class="check"><input type="checkbox" name="skillUseOwn" ${settings.skillUseOwn !== false ? "checked" : ""}> Use Callio's own skills folder</label>
+        <div id="skill-folders" class="pick-list compact"></div>
+        <div class="row"><button type="button" id="open-own-skills">Open Callio's skills folder</button><button type="button" id="add-skill-folder">Add a skills folder…</button><button type="button" id="choose-skills" class="primary">Choose active skills…</button></div>
+        <label class="check"><input type="checkbox" name="avoidLint" ${settings.avoidLint !== false ? "checked" : ""}> Underline words from "avoid" lists in my skills (e.g. *vocab-avoid.md)</label>
+      </div>
+      <div class="sg"><h3 class="set-h sg-h">Install from GitHub</h3>
+        <div class="gh-install">
+          <label class="wide">Repository or skill folder <input id="gh-url" type="search" spellcheck="false" placeholder="https://github.com/owner/repo — or a link to one skill's folder"></label>
+          <div class="row"><button type="button" id="gh-find" class="primary">Install</button>
+            <label class="check" data-row="0"><input type="checkbox" name="skillsShareClaude" ${settings.skillsShareClaude !== false ? "checked" : ""}> Also give them to Claude Code</label></div>
+          <div id="gh-found"></div>
         </div>
-      </div>`).join("")}
-    </div>
-    <h3 class="set-h">Claude Code</h3>
-    <div id="cc-settings"></div>
-    <h3 class="set-h">Models</h3>
-    ${[["chat", "Chat panel"], ["edit", "Rewrites & Fix-with-AI"], ["write", "Writing suggestions (grammar, style)"], ["translate", "Translation (AI)"], ["summary", "Summaries (long chats, /brief) — a small, cheap model is enough"], ["inline", "Inline completion"]].map(([r, l]) => `
-      <label>${l} <select class="m-role" data-role="${r}"></select></label>`).join("")}
-    <label>Effort for Claude models (chat)
-      <select name="aiEffort"><option value="">Model default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra</option><option value="max">Max — 4× or more usage</option></select></label>
-    <label class="check"><input type="checkbox" name="aiMemory" ${settings.aiMemory !== false ? "checked" : ""}> Remember conversations per project folder — recalled automatically when relevant, with no extra AI calls (/memory to see or forget)</label>
-    <label class="check"><input type="checkbox" name="aiThinking" ${settings.aiThinking !== false ? "checked" : ""}> Show the model's thinking live while it works (Claude, Claude Code, reasoning models)</label>
-    <label class="check"><input type="checkbox" name="aiInlineEnabled" ${settings.aiInlineEnabled ? "checked" : ""}> Inline completion while typing (ghost text, Tab to accept)</label>
-    <label>Inline completion delay (ms) <input type="number" name="aiInlineDelay" min="200" max="5000" value="${settings.aiInlineDelay || 700}"></label>
-    <h3 class="set-h">Internet</h3>
-    <label class="check"><input type="checkbox" name="aiWeb" ${settings.aiWeb !== false ? "checked" : ""}> Let the AI use the internet (search papers, verify citations, read pages)</label>
-    <label class="check"><input type="checkbox" name="libAiDetails" ${settings.libAiDetails !== false ? "checked" : ""}> Library: when a PDF has no details, let the AI read its first pages and look it up on the internet (uses the Summary model)</label>
-    <p class="note">Pick the search engine (Google, Cốc Cốc, Bing, DuckDuckGo, Google Scholar, Semantic Scholar, arXiv, PubMed…) from the chat's toolbar, next to the globe. Engines are read from their own results pages, like in your browser; no key is needed. The services below are used when the toolbar is set to Automatic.</p>
-    <label>Automatic web search uses
-      <select name="aiSearchBackend">
-        <option value="none">The model's own search (Claude), otherwise Google</option>
-        <option value="brave">Brave Search API</option>
-        <option value="tavily">Tavily</option>
-        <option value="searxng">SearXNG (your server)</option>
-      </select></label>
-    <label class="s-url" ${settings.aiSearchBackend === "searxng" ? "" : "hidden"}>SearXNG URL <input name="aiSearchUrl" type="text" value="${esc(settings.aiSearchUrl || "")}" placeholder="http://localhost:8888"></label>
-    <label class="s-key" ${["brave", "tavily"].includes(settings.aiSearchBackend) ? "" : "hidden"}>Search API key <input id="search-key" type="password" autocomplete="off"></label>
-    <p class="note">Paper search and citation checks (OpenAlex, Crossref, doi.org) are free and need no key.</p>
-    <h3 class="set-h">Skills</h3>
-    <label class="check"><input type="checkbox" name="skillUseOwn" ${settings.skillUseOwn !== false ? "checked" : ""}> Use Callio's own skills folder <a href="#" id="open-own-skills">open</a></label>
-    <div id="skill-folders"></div>
-    <div class="row"><button type="button" id="add-skill-folder">Add a skills folder…</button><button type="button" id="choose-skills">Choose active skills…</button></div>
-    <div class="gh-install">
-      <label>Install skills from GitHub <input id="gh-url" type="text" spellcheck="false" placeholder="https://github.com/owner/repo — or a link to one skill's folder"></label>
-      <div class="row"><button type="button" id="gh-find" class="primary">Install</button>
-        <label class="check"><input type="checkbox" name="skillsShareClaude" ${settings.skillsShareClaude !== false ? "checked" : ""}> Also give them to Claude Code</label></div>
-      <div id="gh-found"></div>
-    </div>
-    <div id="skills-installed"></div>
-    <label class="check"><input type="checkbox" name="avoidLint" ${settings.avoidLint !== false ? "checked" : ""}> Underline words from "avoid" lists in my skills (e.g. *vocab-avoid.md)</label>
-  `;
-  // provider events
-  for (const el of box.querySelectorAll(".prov")) {
-    const id = el.dataset.p;
-    api.getSecret(`ai-key-${id}`).then((k) => { if (k) el.querySelector(".p-key").value = k; }).catch(() => {});
-    el.querySelector(".p-en").onchange = (e) => { setProv(id, { enabled: e.target.checked }); el.classList.toggle("on", e.target.checked); fillRoles(); refreshModelSelect(); };
-    el.querySelector(".p-url").onchange = (e) => setProv(id, { baseUrl: e.target.value.trim() });
-    el.querySelector(".p-key").onchange = async (e) => { await api.setSecret(`ai-key-${id}`, e.target.value.trim()); toast("Key saved", "ok", 1500); };
-    el.querySelector(".p-models").onclick = async () => {
-      const st = el.querySelector(".p-status");
-      st.textContent = "Loading…"; st.className = "p-status note";
-      try {
-        const ms = await api.aiListModels(providerFor(id));
-        setProv(id, { enabled: true, models: ms.map((m) => m.id) });
-        el.querySelector(".p-en").checked = true; el.classList.add("on");
-        st.textContent = `${ms.length} models`; st.className = "p-status note ok";
-        fillRoles(); refreshModelSelect();
-      } catch (e) { st.textContent = e.message; st.className = "p-status note err"; }
-    };
-    el.querySelector(".p-addmodel").onchange = (e) => {
-      const m = e.target.value.trim(); if (!m) return;
-      setProv(id, { enabled: true, models: [...new Set([m, ...(provCfg(id).models || [])])] });
-      e.target.value = ""; fillRoles(); refreshModelSelect();
-      el.querySelector(".p-status").textContent = `${provCfg(id).models.length} models`;
-    };
-  }
+      </div>
+      <div class="sg"><div id="skills-installed"></div></div>
+    </div>`;
+  // tabs
+  for (const b of box.querySelectorAll(".set-tabs button")) b.onclick = () => {
+    aiTab = b.dataset.tab;
+    for (const x of box.querySelectorAll(".set-tabs button")) x.classList.toggle("on", x === b);
+    for (const p of box.querySelectorAll(".ai-pane")) p.hidden = p.dataset.pane !== aiTab;
+  };
+  // providers: the list and the chosen one's settings
+  const showProv = (id) => {
+    provSel = id;
+    for (const r of box.querySelectorAll(".pl-row")) { r.classList.toggle("on", r.dataset.p === id); r.setAttribute("aria-selected", r.dataset.p === id); }
+    renderProvDetail(box.querySelector(".prov-detail"), id, () => {
+      const r = box.querySelector(`.pl-row[data-p="${id}"]`);
+      r.querySelector(".pl-dot").classList.toggle("ok", provOn(id));
+      r.querySelector(".pl-meta").textContent = provMeta(id);
+      fillRoles(); refreshModelSelect();
+    });
+  };
+  for (const r of box.querySelectorAll(".pl-row")) r.onclick = () => showProv(r.dataset.p);
   const fillRoles = (fillRolesRef = () => {
     for (const s of box.querySelectorAll(".m-role")) {
-      const chatRole = s.dataset.role === "chat";
-      s.innerHTML = chatRole ? "" : `<option value="">Same as chat${s.dataset.role === "inline" && isCCModel(modelFor("chat")) ? " (off with Claude Code — pick one to use it)" : ""}</option>`;
+      const role = s.dataset.role, chatRole = role === "chat";
+      s.innerHTML = chatRole ? "" : `<option value="">${role === "library" ? "Same as summaries" : `Same as chat${role === "inline" && isCCModel(modelFor("chat")) ? " (off with Claude Code — pick one to use it)" : ""}`}</option>`;
       // Claude Code works for every role (completion only when picked for it explicitly)
       fillModelOptions(s, { claudeCode: true });
-      if (chatRole && !s.childElementCount) s.innerHTML = `<option value="">Turn on Claude Code above, or add a provider</option>`;
-      s.value = settings[`aiModel_${s.dataset.role}`] || (chatRole ? modelFor("chat") || "" : "");
+      if (chatRole && !s.childElementCount) s.innerHTML = `<option value="">Turn on Claude Code or a provider first</option>`;
+      s.value = settings[`aiModel_${role}`] || (chatRole ? modelFor("chat") || "" : "");
       if (s.selectedIndex < 0) s.value = chatRole ? (modelFor("chat") || "") : "";
       s.onchange = async () => {
         let v = s.value;
-        if (v === "claudecode|__other") { v = await askCustomCCModel(); if (!v) { s.value = settings.aiModel_chat || ""; return; } }
-        updateSettings({ [`aiModel_${s.dataset.role}`]: v });
+        if (v === "claudecode|__other") { v = await askCustomCCModel(); if (!v) { s.value = settings[`aiModel_${role}`] || ""; return; } }
+        updateSettings({ [`aiModel_${role}`]: v });
         fillRoles(); refreshModelSelect();
       };
     }
   });
   fillRoles();
+  showProv(provSel);
   // plain settings
   for (const inp of box.querySelectorAll("input[name], select[name]")) {
     if (inp.tagName === "SELECT") inp.value = settings[inp.name] || (inp.name === "aiEffort" ? "" : "none");
@@ -1303,11 +1325,12 @@ export function renderAISettings() {
   for (const f of settings.skillFolders || []) {
     const row = document.createElement("div");
     row.className = "folder-row";
-    row.innerHTML = `<span class="mono"></span><button type="button" class="icon small" title="Remove">${ic("x")}</button>`;
+    row.innerHTML = `${ic("folder")}<span class="mono"></span><button type="button" class="icon small" title="Remove">${ic("x")}</button>`;
     row.querySelector("span").textContent = f;
     row.querySelector("button").onclick = () => { updateSettings({ skillFolders: (settings.skillFolders || []).filter((x) => x !== f) }); renderAISettings(); scanSkills(); };
     sf.appendChild(row);
   }
+  sf.hidden = !(settings.skillFolders || []).length;
   box.querySelector("#add-skill-folder").onclick = async () => {
     const p = await api.pickFolder("Choose a folder with skills or style guides");
     if (!p) return;
@@ -1318,8 +1341,51 @@ export function renderAISettings() {
   };
   box.querySelector("#choose-skills").onclick = async () => { await scanSkills(); openSkillsDialog(); };
   renderGithubSkills(box);
-  import("./claude-code.js").then((m) => m.renderCCSettings());
   box.querySelector("#open-own-skills").onclick = async (e) => { e.preventDefault(); api.openPath(await call("skills_own_dir")); };
+}
+
+/** The settings of one provider, under the list. */
+function renderProvDetail(el, id, changed) {
+  if (id === "claudecode") {
+    el.innerHTML = `<div class="sg prov-card"><h3 class="set-h sg-h">Claude Code</h3><div id="cc-settings"></div></div>`;
+    import("./claude-code.js").then((m) => m.renderCCSettings(changed));
+    return;
+  }
+  const p = PRESETS.find((x) => x.id === id);
+  const c = provCfg(id);
+  el.innerHTML = `
+    <div class="sg prov-card"><h3 class="set-h sg-h">${esc(p.name)}</h3>
+      <label class="check"><input type="checkbox" class="p-en" ${c.enabled ? "checked" : ""}> Use ${esc(p.name)}</label>
+      <label>API key${p.optionalKey ? " (optional)" : ""} <input class="p-key" type="password" autocomplete="off" placeholder="${p.keyUrl ? "Paste key" : "Leave empty if your server has no key"}"></label>
+      <label>Base URL <input class="p-url" type="text" value="${esc(c.baseUrl || p.baseUrl)}" placeholder="https://…/v1"></label>
+      <label>Add a model by name <input class="p-addmodel" type="text" placeholder="A model id the list doesn't show"></label>
+      <div class="row">
+        <button type="button" class="p-models primary">Load models</button>
+        ${p.keyUrl ? `<button type="button" class="p-getkey" data-url="${p.keyUrl}">Get a key ↗</button>` : ""}
+        <span class="p-status note">${(c.models || []).length ? `${c.models.length} models` : ""}</span>
+      </div>
+      ${(c.models || []).length ? `<details class="adv"><summary>Models (${c.models.length})</summary><div class="pick-list compact p-mlist">${c.models.map((m) => `<div class="folder-row"><span class="mono">${esc(m)}</span></div>`).join("")}</div></details>` : ""}
+    </div>`;
+  api.getSecret(`ai-key-${id}`).then((k) => { if (k) el.querySelector(".p-key").value = k; }).catch(() => {});
+  el.querySelector(".p-en").onchange = (e) => { setProv(id, { enabled: e.target.checked }); changed(); };
+  el.querySelector(".p-url").onchange = (e) => setProv(id, { baseUrl: e.target.value.trim() });
+  el.querySelector(".p-key").onchange = async (e) => { await api.setSecret(`ai-key-${id}`, e.target.value.trim()); toast("Key saved", "ok", 1500); };
+  el.querySelector(".p-getkey")?.addEventListener("click", (e) => api.openUrl(e.currentTarget.dataset.url));
+  el.querySelector(".p-models").onclick = async () => {
+    const st = el.querySelector(".p-status");
+    st.textContent = "Loading…"; st.className = "p-status note";
+    try {
+      const ms = await api.aiListModels(providerFor(id));
+      setProv(id, { enabled: true, models: ms.map((m) => m.id) });
+      changed(); renderProvDetail(el, id, changed);
+      el.querySelector(".p-status").textContent = `${ms.length} models`; el.querySelector(".p-status").className = "p-status note ok";
+    } catch (e) { st.textContent = e.message; st.className = "p-status note err"; }
+  };
+  el.querySelector(".p-addmodel").onchange = (e) => {
+    const m = e.target.value.trim(); if (!m) return;
+    setProv(id, { enabled: true, models: [...new Set([m, ...(provCfg(id).models || [])])] });
+    changed(); renderProvDetail(el, id, changed);
+  };
 }
 
 // ---------------- skills from GitHub ----------------
@@ -1383,7 +1449,10 @@ async function renderInstalled() {
   let list = [];
   try { list = await api.skillsInstalled(); } catch {}
   if (!list.length) { box.innerHTML = ""; return; }
-  box.innerHTML = `<div class="inst-head"><span>Installed from GitHub</span><button type="button" class="small" id="sk-update-all">Check for updates</button></div>`;
+  box.innerHTML = `<h3 class="set-h sg-h">Installed from GitHub <small class="note">${list.length}</small></h3><div class="inst-head">${list.length > 6 ? `<input type="search" id="sk-filter" placeholder="Filter installed skills…">` : "<span></span>"}<button type="button" class="small" id="sk-update-all">Check for updates</button></div><div class="pick-list inst-list"></div>`;
+  const listEl = box.querySelector(".inst-list");
+  const filter = box.querySelector("#sk-filter");
+  if (filter) filter.oninput = () => { const q = filter.value.trim().toLowerCase(); for (const r of listEl.children) r.hidden = !!q && !r.textContent.toLowerCase().includes(q); };
   for (const s of list) {
     const row = document.createElement("div");
     row.className = "folder-row inst-row";
@@ -1402,7 +1471,7 @@ async function renderInstalled() {
       try { await api.skillsRemove(s.folder); } catch (err) { toast(err.message, "err"); }
       await scanSkills(); renderInstalled();
     };
-    box.appendChild(row);
+    listEl.appendChild(row);
   }
   box.querySelector("#sk-update-all").onclick = async (e) => {
     e.target.disabled = true; e.target.textContent = "Checking…";

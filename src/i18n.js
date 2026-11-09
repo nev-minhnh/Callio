@@ -20,6 +20,7 @@ const PATTERNS = [
   [/^Couldn't open (.+): (.+)$/, "Không mở được $1: $2"],
   [/^Couldn't save (.+): (.+)$/, "Không lưu được $1: $2"],
   [/^(\d[\d,.]*) words?$/, "$1 từ"],
+  [/^(.+): (\d[\d,.]*) words?$/, "$1: $2 từ"],
   [/^Page (\d+) of (\d+)$/, "Trang $1/$2"],
   [/^(\d+) pages$/, "$1 trang"],
   [/^Ln (\d+), Col (\d+)(.*)$/, (m, a, b, c) => `Dòng ${a}, Cột ${b}${c.replace(/(\d+) sel/, "$1 đã chọn")}`],
@@ -55,6 +56,24 @@ const PATTERNS = [
   [/^(.+) — Callio$/, "$1 — Callio"],
   [/^Indexing the text of (.+)… \((\d+) left\)$/, "Đang lập chỉ mục văn bản của $1… (còn $2)"],
   [/^(.*) · added (.+)$/, (m, a, b) => `${VI[a] || a} · thêm ngày ${b}`],
+  [/^Save changes to (.+)\?$/, "Lưu thay đổi của $1?"],
+  [/^Save your changes to (.+) first\?$/, "Lưu thay đổi của $1 trước?"],
+  [/^New name for (.+)$/, "Tên mới cho $1"],
+  [/^Couldn't create (.+): (.+)$/, "Không tạo được $1: $2"],
+  [/^Couldn't rename (.+): (.+)$/, "Không đổi tên được $1: $2"],
+  [/^Creating (.+)…$/, "Đang tạo $1…"],
+  [/^Pinned (.+)$/, "Đã ghim $1"],
+  [/^Unpinned (.+)$/, "Đã bỏ ghim $1"],
+  [/^Sent (.+) to the printer$/, "Đã gửi $1 tới máy in"],
+  [/^Exporting (.+)…$/, "Đang xuất $1…"],
+  [/^Open (.+)\?$/, "Mở $1?"],
+  [/^(\d+) skill\(s\) found$/, "Tìm thấy $1 kỹ năng"],
+  [/^On · (\d+) models$/, "Bật · $1 mô hình"],
+  [/^(\d+) models$/, "$1 mô hình"],
+  [/^Models \((\d+)\)$/, "Mô hình ($1)"],
+  [/^Use (.+)$/, "Dùng $1"],
+  [/^Remove (.+)\?$/, "Gỡ $1?"],
+  [/^(.+) is large$/, "$1 có dung lượng lớn"],
   [/^Line endings: (.+) — click to change$/, "Kết thúc dòng: $1 — bấm để đổi"],
   [/^Conversations are saved with this folder: (.+)$/, "Cuộc trò chuyện được lưu cùng thư mục này: $1"],
   [/^Show only (.+)$/, (m, a) => "Chỉ hiện " + (VI[a] || a)],
@@ -79,7 +98,9 @@ function lookup(s) {
   const pre = /^([^\p{L}\p{N}(“"]+)(.+)$/u.exec(t);
   if (pre && VI[pre[2]]) return s.replace(t, pre[1] + VI[pre[2]]);
   for (const [re, to] of PATTERNS) {
-    if (re.test(t)) return s.replace(t, t.replace(re, to));
+    if (!re.test(t)) continue;
+    const out = t.replace(re, to);
+    if (out && out !== "null") return s.replace(t, out);
   }
   return null;
 }

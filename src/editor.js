@@ -64,6 +64,7 @@ const mdStyle = HighlightStyle.define([
 ]);
 
 export function kindOf(path) {
+  if (/\.(drawio|dio)(\.xml)?$/i.test(path || "") || /\.drawio\.(svg|png)$/i.test(path || "")) return "drawio";
   const ext = (path || "").toLowerCase().split(".").pop();
   if (["md", "markdown", "mdown", "mkd", "txt"].includes(ext)) return ext === "txt" ? "text" : "md";
   if (["tex", "sty", "cls", "ltx", "dtx", "tikz"].includes(ext)) return "tex";
@@ -89,7 +90,7 @@ export function kindOf(path) {
 export const IMAGE_EXT = ["jpg", "jpeg", "jpe", "jfif", "png", "tif", "tiff", "webp", "avif", "heic", "heif", "jxl", "bmp", "gif", "psd", "dng", "cr2", "cr3", "crw", "nef", "nrw", "arw", "srf", "sr2", "raf", "orf", "rw2", "rwl", "pef", "srw", "x3f", "3fr", "fff", "iiq", "erf", "mef", "mos", "kdc", "dcr"];
 const STRUCT = Object.fromEntries([
   ...["json", "jsonc", "json5", "geojson", "webmanifest", "har", "jsonl", "ndjson", "code-workspace", "topojson", "jsonld"].map((e) => [e, "json"]),
-  ...["xml", "svg", "xsd", "xsl", "xslt", "plist", "csproj", "vbproj", "fsproj", "vcxproj", "props", "targets", "config", "resx", "xaml", "axaml", "kml", "gpx", "rss", "atom", "wsdl", "pom", "fxml", "xlf", "xliff", "nuspec", "tmx", "graphml", "drawio", "storyboard", "xib", "opf", "ncx"].map((e) => [e, "xml"]),
+  ...["xml", "svg", "xsd", "xsl", "xslt", "plist", "csproj", "vbproj", "fsproj", "vcxproj", "props", "targets", "config", "resx", "xaml", "axaml", "kml", "gpx", "rss", "atom", "wsdl", "pom", "fxml", "xlf", "xliff", "nuspec", "tmx", "graphml", "storyboard", "xib", "opf", "ncx"].map((e) => [e, "xml"]),
   ["yaml", "yaml"], ["yml", "yaml"],
 ]);
 /** Kinds edited as text in the source editor. */

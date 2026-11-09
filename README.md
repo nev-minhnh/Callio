@@ -80,6 +80,7 @@ A lightweight editor for Windows 11: Markdown and LaTeX with a live preview, Syn
 - **Every AI edit is a reviewable diff**, with Accept or Reject per change or for all, and Callio saves a version of the file first.
 - **English or Vietnamese interface** (Settings → Editor → *Language*), switched at once without restarting; your documents and file names are never translated.
 - **HTML files**: Editor, Preview, Split and **Visual edit** (type into the page itself with a format bar; only the `<body>` is rewritten). Open tabs can be **reordered by dragging**.
+- **draw.io diagrams** (`.drawio`, `.dio`, `.drawio.svg`, `.drawio.png`): the full draw.io editor, offline, with save, export and New ▾ → draw.io diagram.
 - **English / Tiếng Việt interface** (Settings → Editor → Language), switched live without restarting.
 - **HTML files**: Editor, Preview, Split and **Visual edit** (type into the page, with a format bar; only the `<body>` is rewritten).
 - **Drag tabs** to reorder them.

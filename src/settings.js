@@ -1,5 +1,5 @@
 import { api } from "./api.js";
-import { settings, updateSettings, toast } from "./main.js";
+import { settings, updateSettings, toast, ask } from "./main.js";
 import { refreshEngineCards } from "./engines.js";
 import { signInOverleaf } from "./overleaf.js";
 
@@ -14,6 +14,75 @@ function showSection(sec) {
   if (sec === "ai") import("./ai.js").then((m) => m.renderAISettings());
   if (sec === "library") import("./library.js").then((m) => m.renderLibrarySettings());
   if (sec === "ocr") import("./ocr.js").then((m) => m.renderOcrSettings($("#ocr-settings")));
+}
+
+// ---------------- one look for every page ----------------
+// Every settings page — the static ones here and those other modules draw (AI, Library, OCR) —
+// is laid out the same way: titled groups (cards), and in them one row per setting with its name
+// on the left and its control on the right; on/off settings are switches. Pages are written as
+// plain <h3> + <label> markup and shaped here as they appear.
+const NO_ROW = ".sr, .no-row, .ocr-card, .gh-list, .skill-row, .pl-row, .csl-list, .engine-card, .cc-status, .ocr-langs, .set-tabs, .wr-panel";
+let rowN = 0;
+function rowify(lab) {
+  if (lab.closest(NO_ROW) || lab.dataset.row === "0") return;
+  const ctl = [...lab.children].find((c) => /^(INPUT|SELECT|TEXTAREA)$/.test(c.tagName) || c.classList.contains("ocr-key"));
+  if (!ctl) return;
+  const isCheck = ctl.tagName === "INPUT" && ctl.type === "checkbox";
+  const wide = ctl.tagName === "TEXTAREA" || (ctl.tagName === "INPUT" && ctl.type === "search") || lab.classList.contains("wide");
+  const row = document.createElement("div");
+  row.className = ["sr", isCheck ? "sr-check" : "", wide ? "sr-wide" : "", ...[...lab.classList].filter((c) => c !== "check" && c !== "wide")].filter(Boolean).join(" ");
+  if (lab.hidden) row.hidden = true;
+  if (lab.title) row.title = lab.title;
+  const left = document.createElement("label");
+  left.className = "sr-l";
+  const input = ctl.matches("input, select, textarea") ? ctl : ctl.querySelector("input, select, textarea");
+  if (input) { if (!input.id) input.id = `sr-${++rowN}`; left.htmlFor = input.id; }
+  for (const n of [...lab.childNodes]) if (n !== ctl) left.appendChild(n);
+  // trim the label text
+  const first = left.firstChild; if (first?.nodeType === 3) first.nodeValue = first.nodeValue.replace(/^\s+/, "");
+  const last = left.lastChild; if (last?.nodeType === 3) last.nodeValue = last.nodeValue.replace(/\s+$/, "");
+  const right = document.createElement("div");
+  right.className = "sr-c";
+  right.appendChild(ctl);
+  row.append(left, right);
+  lab.replaceWith(row);
+}
+/** Puts each <h3> and what follows it (until the next) into a card. */
+function groupify(box) {
+  if (box.dataset.grouped === "1" || box.querySelector(":scope > .sg")) return;
+  const kids = [...box.children];
+  if (!kids.some((k) => /^H[34]$/.test(k.tagName))) return;
+  box.dataset.grouped = "1";
+  let g = null;
+  for (const k of kids) {
+    if (/^H[34]$/.test(k.tagName) && !k.closest(".sg")) {
+      g = document.createElement("div");
+      g.className = "sg";
+      k.classList.add("sg-h");
+      box.insertBefore(g, k);
+      g.appendChild(k);
+      continue;
+    }
+    if (k.classList.contains("set-tabs") || k.classList.contains("ai-pane") || k.classList.contains("set-intro")) { g = null; continue; }
+    if (!g) { g = document.createElement("div"); g.className = "sg"; box.insertBefore(g, k); }
+    g.appendChild(k);
+  }
+}
+export function normalizeSettings(root = $(".settings-pages")) {
+  if (!root) return;
+  for (const box of root.querySelectorAll("section, #lib-settings, #ocr-settings, .ai-pane, .sg-body")) groupify(box);
+  for (const lab of root.querySelectorAll("label")) rowify(lab);
+}
+let normQueued = false;
+function watchSettings() {
+  const root = $(".settings-pages");
+  if (!root) return;
+  new MutationObserver(() => {
+    if (normQueued) return;
+    normQueued = true;
+    queueMicrotask(() => { normQueued = false; normalizeSettings(root); });
+  }).observe(root, { childList: true, subtree: true });
+  normalizeSettings(root);
 }
 
 export async function openSettings(section = "editor") {
@@ -41,6 +110,7 @@ async function refreshAssoc() {
 }
 
 export function initSettings() {
+  watchSettings();
   const form = $("#settings-form");
   form.addEventListener("change", (e) => {
     const el = e.target;

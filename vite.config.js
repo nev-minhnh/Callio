@@ -34,6 +34,18 @@ function devBridge() {
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify(await p));
       });
+      // the draw.io editor, from the same zip the app ships (src-tauri/src/drawio.rs)
+      let dz = null;
+      server.middlewares.use("/__drawio", async (req, res) => {
+        if (!dz) { const { unzipSync } = await import("fflate"); dz = unzipSync(fs.readFileSync("vendor/drawio.zip")); }
+        let p = decodeURIComponent(new URL(req.url, "http://x").pathname.slice(1));
+        if (!p || p.endsWith("/")) p += "index.html";
+        const f = dz[p];
+        if (!f) { res.statusCode = 404; return res.end("not found"); }
+        const ext = p.split(".").pop();
+        res.setHeader("content-type", { html: "text/html", js: "text/javascript", css: "text/css", svg: "image/svg+xml", png: "image/png", json: "application/json", txt: "text/plain; charset=utf-8", xml: "application/xml", gif: "image/gif", jpg: "image/jpeg", woff2: "font/woff2" }[ext] || "application/octet-stream");
+        res.end(Buffer.from(f));
+      });
       server.middlewares.use("/__stat", (req, res) => {
         const path = new URL(req.url, "http://x").searchParams.get("path");
         try { const st = fs.statSync(path); res.end(JSON.stringify({ exists: true, isDir: st.isDirectory(), size: st.size, mtime: Math.round(st.mtimeMs) })); }

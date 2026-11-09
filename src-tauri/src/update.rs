@@ -220,9 +220,11 @@ fn portable_files(exe: &Path, my_dll_hash: Option<&[u8]>) -> (Vec<PathBuf>, Opti
             files.push(dll);
         }
     }
-    let office = dir.join("callio-office.exe");
-    if office.is_file() {
-        files.push(office);
+    for f in ["callio-office.exe", "drawio.zip"] {
+        let p = dir.join(f);
+        if p.is_file() {
+            files.push(p);
+        }
     }
     let readme = dir.join("READ-ME.txt");
     if std::fs::read_to_string(&readme).map(|t| t.starts_with("Callio ")).unwrap_or(false) {
@@ -531,7 +533,7 @@ mod imp {
         let me = std::env::current_exe()?;
         let (src_dir, dst_dir) = (me.parent().unwrap().to_path_buf(), old.parent().unwrap().to_path_buf());
         let mut pairs = vec![(me.clone(), old.to_path_buf())];
-        for f in ["WebView2Loader.dll", "callio-office.exe", "READ-ME.txt"] {
+        for f in ["WebView2Loader.dll", "callio-office.exe", "drawio.zip", "READ-ME.txt"] {
             if src_dir.join(f).exists() {
                 pairs.push((src_dir.join(f), dst_dir.join(f)));
             }

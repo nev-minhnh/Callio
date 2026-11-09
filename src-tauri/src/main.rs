@@ -17,6 +17,7 @@ mod shellops;
 mod media;
 mod translate;
 mod websearch;
+mod drawio;
 mod ocr;
 mod localhttp;
 mod overleaf;
@@ -143,6 +144,7 @@ fn main() {
         .manage(ai::AiState::default())
         .manage(claude_code::CcState::default())
         .manage(office::OfficeState::default())
+        .register_asynchronous_uri_scheme_protocol("drawio", drawio::protocol)
         .setup(|app| {
             websearch::init(app.handle());
             std::thread::spawn(|| {
@@ -190,6 +192,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             startup_paths,
+            drawio::drawio_available,
             exit_app,
             show_window,
             close_ack,

@@ -41,3 +41,10 @@ Rust crates
 
 Ribbon icons are the Craft apps' icons exported to SVG (MIT OR Apache-2.0); the
 interface icons follow the Lucide style (ISC) and were drawn for Callio.
+
+draw.io diagram editor
+  drawio.zip (shipped next to Callio.exe) is the draw.io web app, unmodified, from
+  https://github.com/jgraph/drawio (src/main/webapp), packed by scripts/build-drawio.mjs.
+  Copyright (c) JGraph Ltd and draw.io AG. Licensed under the Apache License 2.0
+  (https://www.apache.org/licenses/LICENSE-2.0). draw.io bundles third-party components
+  under their own licenses (listed in that repository).

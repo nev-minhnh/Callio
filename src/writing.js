@@ -702,7 +702,12 @@ function refreshPanel() {
   panel.querySelector(".wr-autosw input")?.addEventListener("change", (e) => { saveCfg({ auto: e.target.checked }); status(e.target.checked ? "Automatic checking started" : "Automatic checking stopped", "ok"); if (e.target.checked && W && !W.paused) maybeCheck(); refreshAll(); });
   panel.querySelectorAll(".wr-tile").forEach((b) => (b.onclick = () => { UI.filter = UI.filter === b.dataset.c ? null : b.dataset.c; UI.tab = "suggestions"; refreshPanel(); }));
   panel.querySelectorAll(".wr-tabs button").forEach((b) => (b.onclick = () => { UI.tab = b.dataset.t; refreshPanel(); }));
-  modelControls({ value: writeModel(), effort: settings.writeEffort, thinking: !!settings.writeThinking, onModel: (v) => { updateSettings({ aiModel_write: v }); }, onEffort: (v) => updateSettings({ writeEffort: v }), onThinking: (v) => updateSettings({ writeThinking: v }) }).then((c) => panel.querySelector(".wr-model-line")?.appendChild(c));
+  const line = panel.querySelector(".wr-model-line");
+  modelControls({ value: writeModel(), effort: settings.writeEffort, thinking: !!settings.writeThinking, onModel: (v) => { updateSettings({ aiModel_write: v }); }, onEffort: (v) => updateSettings({ writeEffort: v }), onThinking: (v) => updateSettings({ writeThinking: v }) }).then((c) => {
+    // the panel may have been redrawn while the controls were being built: fill only this
+    // drawing's line, and replace what is there (never a second row of controls)
+    if (line.isConnected) line.replaceChildren(c);
+  });
   const body = panel.querySelector(".wr-tabbody");
   if (UI.tab === "suggestions") suggestionsTab(body, shown);
   else if (UI.tab === "goals") goalsTab(body);

@@ -139,7 +139,9 @@ export async function openAssist(mode, host, { at = null, text = null } = {}) {
 
 async function render() {
   const p = P; if (!p) return;
-  p.seq++;
+  const mySeq = ++p.seq;
+  // a newer render (another mode picked meanwhile) owns the popup: this one stops after its await
+  const stale = () => P !== p || p.seq !== mySeq;
   const el = p.el;
   for (const b of el.querySelectorAll(".as-modes button")) b.classList.toggle("on", b.dataset.m === p.mode);
   const ctl = el.querySelector(".as-ctl");
@@ -156,6 +158,7 @@ async function render() {
       effort: settings.assistEffort, thinking: !!settings.assistThinking,
       onModel: (v) => { updateSettings({ translateEngine: v }); run(); }, onEffort: (v) => updateSettings({ assistEffort: v }), onThinking: (v) => updateSettings({ assistThinking: v }),
     });
+    if (stale()) return;
     const to = document.createElement("select");
     to.className = "as-to"; to.title = "Translate into";
     to.innerHTML = LANGS.map(([c2, n]) => `<option value="${c2}">${n}</option>`).join("");
@@ -167,12 +170,14 @@ async function render() {
     run();
   } else if (p.mode === "meaning") {
     const c = await modelControls({ value: settings.assistModel, effort: settings.assistEffort, thinking: !!settings.assistThinking, onModel: (v) => { updateSettings({ assistModel: v }); run(); }, onEffort: (v) => updateSettings({ assistEffort: v }), onThinking: (v) => updateSettings({ assistThinking: v }) });
+    if (stale()) return;
     ctl.append(c);
     body.append(what);
     body.insertAdjacentHTML("beforeend", `<div class="as-out"></div><div class="as-note note"></div><div class="as-row"></div>`);
     run();
   } else {
     const c = await modelControls({ value: settings.assistModel, effort: settings.assistEffort, thinking: !!settings.assistThinking, onModel: (v) => updateSettings({ assistModel: v }), onEffort: (v) => updateSettings({ assistEffort: v }), onThinking: (v) => updateSettings({ assistThinking: v }) });
+    if (stale()) return;
     ctl.append(c);
     body.append(what);
     body.insertAdjacentHTML("beforeend", `

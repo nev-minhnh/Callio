@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.2
+
+- Writing assistant: pressing *Check page* (or anything that redraws the panel quickly) no longer stacks extra rows of model / effort / Thinking controls — there is always exactly one. The same is fixed in the Ask AI / Translate / Meaning popup when switching modes quickly.
+
 ## 0.14.1
 
 - **The file list follows the tab you click.** When the tab's file is outside the folder shown, the list switches to that file's folder; when it is inside, the file is highlighted. Only one file name is ever highlighted — the active tab's.

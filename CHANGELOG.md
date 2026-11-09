@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.12.3
+
+- The thin moving line at the top no longer runs while a dialog waits for you (opening a file or folder, Save As, signing in, printing) — it only shows while Callio itself is working.
+
 ## 0.12.2
 
 - **Writing assistant: click a suggestion to go to it.** The passage scrolls to the middle of the screen, is selected and flashes, so you can read it in context; nothing changes until you press the fix or *Accept*.

@@ -21,8 +21,9 @@ if (isTauri) {
 export const IS_TAURI = isTauri;
 
 // Any wait on the backend longer than half a second shows a thin moving line at the top of the
-// window, so no button ever seems dead (long-running streams with their own display are left out).
-const QUIET = /^(ai_chat|cc_run|cc_login|fs_watch|media_transcode|extract_with|launch_program|show_window|close_ack|exit_app|library_server|office_warm|web_search_engine)$/;
+// window, so no button ever seems dead. Left out: dialogs waiting for you (picking a file or
+// folder, signing in, printing) and long-running work with its own display.
+const QUIET = /^(pick_[a-z_]+|ol_sign_in|lib_sign_in_pdf|print_file|define_english|translate_google|ai_chat|cc_run|cc_login|fs_watch|media_transcode|extract_with|launch_program|show_window|close_ack|exit_app|library_server|office_warm|web_search_engine)$/;
 let busyN = 0, busyT = 0;
 function busyLine(on) {
   let el = document.getElementById("busy-line");

@@ -4,7 +4,7 @@
   "description": "Callio – Shape your folio",
   "license": "MIT OR Apache-2.0",
   "repository": "github:nev-minhnh/Callio",
-  "version": "0.12.2",
+  "version": "0.12.3",
   "type": "module",
   "scripts": {
     "dev": "vite",

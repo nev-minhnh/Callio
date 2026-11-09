@@ -1284,6 +1284,12 @@ export default {
 "Not in a collection": "Không thuộc bộ sưu tập",
 "All papers": "Tất cả bài báo",
 "a paper": "một bài báo",
+"Stop checking": "Dừng kiểm tra",
+"Stop all checking: Check page, scrolling and Whole document send nothing until this is turned off. Suggestions already found stay.": "Dừng mọi lượt kiểm tra: Kiểm tra trang, cuộn trang và Toàn bộ tài liệu đều không gửi gì cho đến khi tắt mục này. Gợi ý đã có vẫn được giữ.",
+"Checking is stopped — nothing is sent to the AI.": "Đã dừng kiểm tra — không gửi gì cho AI.",
+"Checking is stopped — turn off “Stop checking” in the writing panel to check again.": "Đã dừng kiểm tra — tắt “Dừng kiểm tra” trong bảng trợ lý viết để kiểm tra lại.",
+"Writing checks stopped": "Đã dừng kiểm tra văn bản",
+"Writing checks on again": "Đã bật lại kiểm tra văn bản",
 "A diagram is saved as .drawio (or .drawio.svg / .drawio.png to keep a picture that draw.io can still edit). Add .drawio to the name?": "Sơ đồ được lưu dưới dạng .drawio (hoặc .drawio.svg / .drawio.png để giữ một ảnh mà draw.io vẫn sửa được). Thêm .drawio vào tên?",
 "A lightweight editor for Markdown, LaTeX, Word documents, spreadsheets, presentations, PDF, pictures and draw.io diagrams. Built with Rust (Tauri), CodeMirror, KaTeX, PDF.js, draw.io and Callio's own engines for documents, spreadsheets, presentations, PDF and pictures.": "Trình soạn thảo gọn nhẹ cho Markdown, LaTeX, tài liệu Word, bảng tính, bản trình chiếu, PDF, ảnh và sơ đồ draw.io. Xây dựng bằng Rust (Tauri), CodeMirror, KaTeX, PDF.js, draw.io và các engine riêng của Callio cho tài liệu, bảng tính, bản trình chiếu, PDF và ảnh.",
 "A model id the list doesn't show": "Mã mô hình không có trong danh sách",
@@ -2102,5 +2108,12 @@ export default {
 "Body Text 3": "Văn bản thân bài 3",
 "Header": "Đầu trang",
 "Footer": "Chân trang",
-"List": "Danh sách"
+"List": "Danh sách",
+"Hide the panel — it comes back when the mouse reaches the left edge": "Ẩn bảng điều hướng — bảng hiện lại khi chuột chạm cạnh trái",
+"Pin the panel": "Ghim bảng điều hướng",
+"Stop all automatic checking: nothing is sent to the AI while you type or scroll. Check page or Whole document turns it back on. Suggestions already found stay.": "Dừng mọi kiểm tra tự động: không gửi gì cho AI khi bạn gõ hoặc cuộn. Bấm Kiểm tra trang hoặc Toàn bộ tài liệu để bật lại. Các gợi ý đã có vẫn giữ nguyên.",
+"Checking is stopped — nothing is sent to the AI. Check page or Whole document turns it back on.": "Đã dừng kiểm tra — không gửi gì cho AI. Bấm Kiểm tra trang hoặc Toàn bộ tài liệu để bật lại.",
+"The whole document has been checked": "Đã kiểm tra toàn bộ tài liệu",
+"Check the text on screen (what was checked and hasn't changed isn't sent again) — turns checking back on": "Kiểm tra văn bản trên màn hình (phần đã kiểm tra và không đổi sẽ không gửi lại) — bật lại kiểm tra",
+"Check the whole document — turns checking back on": "Kiểm tra toàn bộ tài liệu — bật lại kiểm tra"
 };

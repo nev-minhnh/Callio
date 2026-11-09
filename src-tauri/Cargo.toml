@@ -1,6 +1,6 @@
 [package]
 name = "callio"
-version = "0.14.0"
+version = "0.14.1"
 description = "Callio – Shape your folio. A lightweight editor for Markdown, LaTeX, Word, spreadsheets, presentations, PDF and pictures"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/nev-minhnh/Callio"

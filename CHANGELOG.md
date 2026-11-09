@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.14.1
+
+- **The file list follows the tab you click.** When the tab's file is outside the folder shown, the list switches to that file's folder; when it is inside, the file is highlighted. Only one file name is ever highlighted — the active tab's.
+- **File badges are now just the extension in bold colour** (no box), with a clearly different, bright colour for each kind of file: Word, Markdown, LaTeX, Excel, PowerPoint, PDF, BibTeX, data, diagrams (now also Visio .vsdx), pictures, video, audio, code, archives, programs…
+- **Writing assistant: Stop checking** is always shown. While it is on, *Check page* and *Whole document* stay available — pressing either turns checking back on and checks right away (*Whole document* greys out only once the whole document has been checked). *Pause / Resume* disappear while checking is stopped, since nothing is running. The model, effort, thinking and *Auto check* stay usable: they are settings, not checks.
+- **Hide the side panel with the pin button** (top right of the panel). Hidden, a thin rainbow line marks the left edge; move the mouse onto it and the panel slides in over the document, and it slides away when the mouse leaves it. Press the pin again to keep it in place.
+- **Writing assistant: “Stop checking” switch**, always shown in the panel. While it is on, nothing is sent to the AI — not *Check page*, not scrolling, not *Whole document* (also from the right-click menu or Ctrl+Alt+G); *Check page*, *Whole document* and *Pause* are greyed out, and a check that was running is cancelled. Suggestions already found stay.
+
 ## 0.14.0
 
 - **draw.io diagrams.** `.drawio`, `.dio`, `.drawio.svg` and `.drawio.png` files open in the full draw.io editor — its menus (File, Edit, View, Arrange, Extras, Help), toolbar, shape libraries and *More Shapes*, format panel, pages, layers, layouts, templates, find, math and export (PNG, JPEG, WebP, SVG, PDF, HTML, XML, animated GIF…). Everything runs from the copy shipped with Callio (`drawio.zip`, next to Callio.exe); nothing comes from the internet. Ctrl+S (or draw.io's *Save*) saves the file; unsaved changes show ● on the tab; *Export as…* asks where to save; Print and PDF open a print preview inside the editor (choose *Save as PDF* in the print dialog), and web links open in your browser. **New ▾ → draw.io diagram** makes a new one. draw.io follows Callio's theme and language.

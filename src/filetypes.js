@@ -9,7 +9,7 @@ const CAT = {
   sheet: ["xlsx", "xlsm", "xltx", "xltm", "xls", "xlsb", "ods", "numbers"],
   deck: ["pptx", "pptm", "ppsx", "ppsm", "potx", "potm", "odp", "ppt", "pps", "key"],
   data: ["csv", "tsv", "tab", "psv", "json", "jsonc", "json5", "jsonl", "ndjson", "geojson", "xml", "yaml", "yml", "toml", "ini", "cfg", "conf", "env", "sql", "parquet", "sqlite", "db"],
-  diagram: ["mmd", "mermaid", "drawio", "dio", "dot", "gv", "puml", "plantuml"],
+  diagram: ["mmd", "mermaid", "drawio", "dio", "vsdx", "vsd", "vsdm", "vss", "vssx", "dot", "gv", "puml", "plantuml"],
   image: ["jpg", "jpeg", "jpe", "jfif", "png", "tif", "tiff", "webp", "avif", "heic", "heif", "jxl", "bmp", "gif", "psd", "svg", "ico", "dng", "cr2", "cr3", "crw", "nef", "nrw", "arw", "srf", "sr2", "raf", "orf", "rw2", "rwl", "pef", "srw", "x3f", "3fr", "fff", "iiq", "erf", "mef", "mos", "kdc", "dcr", "eps", "ai"],
   video: ["mp4", "m4v", "mkv", "webm", "mov", "avi", "wmv", "flv", "mpg", "mpeg", "m2ts", "mts", "ts", "3gp", "3g2", "ogv", "vob", "asf", "f4v", "divx", "rm", "rmvb"],
   audio: ["mp3", "wav", "flac", "m4a", "aac", "ogg", "oga", "opus", "wma", "aiff", "aif", "alac", "ape", "amr", "mid", "midi", "weba", "wv", "dsf", "ac3", "dts", "mka"],

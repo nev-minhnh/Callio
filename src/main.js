@@ -113,10 +113,53 @@ function applySettings() {
   else root.style.removeProperty("--editor-font");
   applyOptions({ wordWrap: settings.wordWrap, lineNumbers: settings.lineNumbers, spellcheck: settings.spellcheck, tabSize: +settings.tabSize || 2 });
   $("#app").classList.toggle("no-sidebar", !settings.sidebar);
+  $("#app").classList.toggle("side-auto", !!settings.sidebar && settings.sidebarPinned === false);
+  syncSidePin();
   $("#sidebar").style.setProperty("--side-w", settings.sideWidth + "px");
   setView(settings.view, false);
   $("#sel-engine").value = settings.engine;
   setLanguage(settings.uiLang);
+}
+
+// ---------------- the side panel: pinned, or shown from the left edge ----------------
+// Unpinned, the panel hides behind a thin rainbow line at the left edge; moving the mouse onto
+// the line slides it in over the document, and it slides away when the mouse leaves it.
+function syncSidePin() {
+  const b = document.getElementById("btn-side-pin");
+  if (!b) return;
+  const pinned = settings.sidebarPinned !== false;
+  b.classList.toggle("on", pinned);
+  b.title = pinned ? "Hide the panel — it comes back when the mouse reaches the left edge" : "Pin the panel";
+  b.setAttribute("aria-pressed", pinned);
+  if (pinned) $("#app").classList.remove("side-peek");
+}
+function initSideAuto() {
+  const app = $("#app"), side = $("#sidebar");
+  const edge = document.createElement("div");
+  edge.id = "side-edge";
+  edge.setAttribute("aria-hidden", "true");
+  $("#main").prepend(edge);
+  const pin = document.createElement("button");
+  pin.id = "btn-side-pin";
+  pin.className = "icon small";
+  pin.innerHTML = ic("pin");
+  pin.onclick = () => updateSettings({ sidebarPinned: settings.sidebarPinned === false });
+  $("#sidebar .side-tabs").appendChild(pin);
+  syncSidePin();
+  let hideTimer = 0;
+  const show = () => { clearTimeout(hideTimer); if (app.classList.contains("side-auto")) app.classList.add("side-peek"); };
+  const hideSoon = () => {
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => {
+      // not while a menu or dialog opened from the panel is still in use
+      if (side.matches(":hover") || document.querySelector(".ctx-menu:not([hidden]), dialog[open]") || side.contains(document.activeElement) && document.activeElement.matches("input, textarea")) return hideSoon();
+      app.classList.remove("side-peek");
+    }, 350);
+  };
+  edge.addEventListener("mouseenter", show);
+  side.addEventListener("mouseenter", show);
+  side.addEventListener("mouseleave", hideSoon);
+  edge.addEventListener("mouseleave", (e) => { if (!side.contains(e.relatedTarget)) hideSoon(); });
 }
 
 // ---------------- UI helpers ----------------
@@ -454,7 +497,8 @@ export async function activate(id) {
   setView(viewFor(t), false);
   updateCodeTools(t);
   $("#tex-tools").style.visibility = t.kind === "tex" || t.kind === "bib" ? "visible" : "hidden";
-  if (t.path && !folder) setFolder(dirname(t.path));
+  // the file list shows the active tab's folder: switch to it when the file is outside the open one
+  if (t.path && (!folder || !isInside(t.path, folder))) setFolder(dirname(t.path));
   await updateLink(t.path);
   if (!isPdf) applyViewerKind(t);
   $("#fmt-bar").hidden = !(t.kind === "md" || t.kind === "tex");
@@ -1342,12 +1386,18 @@ function startRename(it, el) {
   input.onclick = (e) => e.stopPropagation();
 }
 /** Mark the active tab's file in the tree; on a tab switch, open its folders and scroll to it. */
+function isInside(p, dir) {
+  const a = norm(p), d = norm(dir).replace(/\/+$/, "");
+  return a === d || a.startsWith(d + "/");
+}
 function highlightTree(reveal = true) {
   const t = activeTab();
   let hit = null;
   for (const el of $$(".tree-item")) {
     const on = !!t?.path && norm(el.dataset.path) === norm(t.path);
     el.classList.toggle("active", on);
+    // one highlighted name only: the active tab's file (an earlier click selection is cleared)
+    if (!on) el.classList.remove("sel");
     if (on) hit = el;
   }
   if (!reveal || !t?.path || !folder) return;
@@ -2991,6 +3041,7 @@ async function boot() {
 
   // toolbar
   $("#btn-sidebar").onclick = () => updateSettings({ sidebar: !settings.sidebar });
+  initSideAuto();
   initMenus();
   $("#w-open").onclick = cmdOpen;
   $("#w-folder").onclick = cmdFolder;
@@ -3005,13 +3056,13 @@ async function boot() {
   for (const b of $$("#view-mode button")) b.onclick = () => setView(b.dataset.view);
   wireTabDrag();
   const showSide = (name) => {
-    for (const b of $$(".side-tabs button")) b.classList.toggle("active", b.dataset.side === name);
+    for (const b of $$(".side-tabs button[data-side]")) b.classList.toggle("active", b.dataset.side === name);
     for (const s of ["files", "outline", "history", "overleaf"]) { const p = $("#side-" + s), was = p.hidden; p.hidden = s !== name; if (was && !p.hidden) enter(p, "fade", { duration: 150 }); }
     if (name === "history") refreshHistoryPanel();
     if (name === "outline") renderOutline();
     if (name === "overleaf") refreshOverleafPanel();
   };
-  for (const b of $$(".side-tabs button")) b.onclick = () => showSide(b.dataset.side);
+  for (const b of $$(".side-tabs button[data-side]")) b.onclick = () => showSide(b.dataset.side);
 
   // pdf toolbar
   $("#pdf-zoom").onchange = (e) => setZoom(e.target.value);

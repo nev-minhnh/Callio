@@ -50,7 +50,7 @@ function cfg() {
     goals: { domain: "General", formality: "Neutral", audience: "General", intent: "Inform", variant: "auto", ...(w.goals || {}) },
     dictionary: w.dictionary || [],
     stats: { accepted: [0, 0, 0, 0], dismissed: 0, weeks: {}, ...(w.stats || {}) },
-    auto: !!w.auto,
+    auto: w.auto !== false,
     delay: Math.max(600, w.delay || 1500),
     enabled: w.enabled !== false,
     dblclick: w.dblclick || "translate",
@@ -155,6 +155,47 @@ function hostKind(t = activeTab()) {
   if (TEXT_KINDS.has(t.kind) && getView()) return "text";
   return null;
 }
+// ---------------------------------------------------------------- what is on screen
+const colNum = (letters) => [...letters].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+/** The units of `units` that are on screen now (only those are checked unless the whole document is asked for). */
+async function onScreen(k, units) {
+  if (k === "text") {
+    const v = getView(); if (!v) return units;
+    const r = v.scrollDOM.getBoundingClientRect();
+    const a = v.posAtCoords({ x: r.left + 40, y: Math.max(r.top + 1, 0) }, false) ?? 0;
+    const b = v.posAtCoords({ x: r.left + 40, y: Math.min(r.bottom - 1, innerHeight) }, false) ?? v.state.doc.length;
+    return units.filter((u) => u.to >= a && u.from <= b);
+  }
+  if (k === "word") {
+    const wm = await import("./word.js");
+    const view = wm.wordView(); if (!view?.scroller) return units;
+    const sr = view.scroller.getBoundingClientRect();
+    // the part of each page on screen, in points
+    const seen = new Map();
+    view.pages.forEach((el, i) => {
+      const r = el.getBoundingClientRect();
+      const top = Math.max(r.top, sr.top), bot = Math.min(r.bottom, sr.bottom);
+      if (bot > top) seen.set(i, [(top - r.top) / view.z, (bot - r.top) / view.z]);
+    });
+    return units.filter((u) => {
+      if (!Array.isArray(u.at)) return false;
+      const [p0, y0, p1, y1] = u.at;
+      for (let p = p0; p <= p1; p++) {
+        const s2 = seen.get(p); if (!s2) continue;
+        const top = p === p0 ? y0 : 0, bot = p === p1 ? y1 : Infinity;
+        if (bot >= s2[0] && top <= s2[1]) return true;
+      }
+      return false;
+    });
+  }
+  if (k === "sheet") {
+    const sm = await import("./sheet.js");
+    const vis = sm.sheetVisible(); if (!vis) return units;
+    return units.filter((u) => { const m = /^([A-Z]+)(\d+)$/.exec(u.key.cell || ""); if (!m) return false; const c = colNum(m[1]), r = +m[2] - 1; return r >= vis.r0 && r <= vis.r1 && c >= vis.c0 && c <= vis.c1; });
+  }
+  return units; // a slide: all of it is on screen
+}
+
 /** The host for Ask / Translate on whatever is shown (the editor, a Word document, a slide…). */
 export function currentHost() { const k = hostKind(); return k ? HOSTS[k] : null; }
 
@@ -210,7 +251,7 @@ async function collect() {
     try { r = await HOSTS[k].units(); } catch { return; }
     if (mine !== W || !r) return;
     const g = cfg().goals;
-    const units = (r.units || []).map((u) => ({ key: u.key, text: u.text, hash: hashOf(u.text, g) }));
+    const units = (r.units || []).map((u) => ({ key: u.key, text: u.text, at: u.at, from: u.from, to: u.to, hash: hashOf(u.text, g) }));
     // after an accepted suggestion, the paragraph's other suggestions carry over
     if (W.carry) {
       const { hash: oldHash, accepted, keyJson } = W.carry;
@@ -271,27 +312,52 @@ function parseBatch(answer, batch) {
 }
 function writeModel() { return settings.aiModel_write || null; }
 
+// scanning waits while the page scrolls, and starts 1 s after it stops
+let lastScrollAt = 0, scrollT = 0;
+function onScrolled() {
+  lastScrollAt = Date.now();
+  clearTimeout(scrollT);
+  scrollT = setTimeout(() => { if (W && cfg().auto) maybeCheck(); }, 1000);
+}
+
+/**
+ * Check what isn't checked yet: the whole document when it was asked for (W.wanted === "all"),
+ * otherwise only the text on screen. What was checked and hasn't changed is never sent again.
+ */
 async function maybeCheck() {
   if (!W || W.job) return;
   const c = cfg();
-  const due = W.wanted || (c.auto && Date.now() - W.changedAt >= c.delay);
-  if (!due) { if (c.auto && W.units.some((u) => !W.checked.has(u.hash))) { clearTimeout(W.autoT); W.autoT = setTimeout(maybeCheck, c.delay); } return; }
+  const scope = W.wanted === "all" ? "all" : W.wanted === "visible" || c.auto ? "visible" : null;
+  if (!scope) return;
+  if (scope === "visible" && !W.wanted) {
+    // as you type: after a pause; scrolling: 1 s after it stops
+    const wait = Math.max(c.delay - (Date.now() - W.changedAt), 1000 - (Date.now() - lastScrollAt));
+    if (wait > 0) { clearTimeout(W.autoT); W.autoT = setTimeout(maybeCheck, wait + 20); return; }
+  }
+  if (scope === "visible" && Date.now() - lastScrollAt < 1000) { clearTimeout(W.autoT); W.autoT = setTimeout(maybeCheck, 1020 - (Date.now() - lastScrollAt)); return; }
+  const pool = scope === "all" ? W.units : await onScreen(kind, W.units);
+  if (!W) return;
   const todo = [];
   let size = 0;
-  for (const u of W.units) {
+  for (const u of pool) {
     if (W.checked.has(u.hash) || W.pending.has(u.hash) || todo.some((x) => x.hash === u.hash)) continue;
     if (todo.length >= 24 || size + u.text.length >= 7000) break;
     todo.push(u); size += u.text.length;
   }
-  if (!todo.length) { W.wanted = false; refreshAll(); return; }
+  if (!todo.length) { W.wanted = false; W.scope = null; refreshAll(); return; }
   const m = await ai();
   const model = writeModel() || m.modelFor("edit");
-  if (!model) { W.wanted = false; W.error = "Sign in to an AI provider in Settings › AI first."; UI.panel = true; refreshAll(); return; }
+  if (!model) {
+    // automatic checks stay quiet; an asked-for check says why nothing happens
+    if (W.wanted) { W.error = "Sign in to an AI provider in Settings › AI first."; UI.panel = true; }
+    W.wanted = false; refreshAll(); return;
+  }
   const mine = W;
+  mine.scope = scope;
   todo.forEach((u) => mine.pending.add(u.hash));
   mine.error = null;
   const numbered = todo.map((u, i) => `[${i + 1}] ${u.text}\n\n`).join("");
-  const job = (mine.job = { started: Date.now(), idRef: {} });
+  const job = (mine.job = { started: Date.now(), idRef: {}, scope });
   refreshAll();
   try {
     const answer = await m.runAI("write", { model, idRef: job.idRef, system: systemPrompt(), messages: [{ role: "user", content: numbered }], maxTokens: 8000, effort: settings.writeEffort || null, thinking: !!settings.writeThinking });
@@ -312,12 +378,18 @@ async function maybeCheck() {
   if (mine === W && (mine.wanted || cfg().auto)) setTimeout(maybeCheck, 50);
 }
 
-/** Open the panel and check everything (Check writing). */
+/** Check the text on screen now (the round button, Check page). */
+export function checkVisible() {
+  if (!hostKind()) return;
+  collect().then(() => { if (W) { if (W.wanted !== "all") W.wanted = "visible"; W.error = null; maybeCheck(); } refreshAll(); });
+}
+
+/** Open the panel and check the whole document (Check writing, Ctrl+Alt+G). */
 export function checkNow() {
   const t = activeTab();
   if (!hostKind(t)) { status("The writing assistant works in Markdown, LaTeX and text files, Word documents, presentations and spreadsheets.", "err"); return; }
   UI.panel = true; UI.tab = "suggestions";
-  collect().then(() => { if (W) { W.wanted = true; W.error = null; maybeCheck(); } refreshAll(); });
+  collect().then(() => { if (W) { W.wanted = "all"; W.error = null; maybeCheck(); } refreshAll(); });
 }
 
 // ---------------------------------------------------------------- 3. suggest: underlines
@@ -499,7 +571,7 @@ function refreshButton() {
     btn = document.createElement("button");
     btn.className = "wr-btn";
     btn.title = "Writing assistant (Ctrl+Alt+G checks the document)";
-    btn.onclick = () => { UI.panel = true; if (W && !W.units.some((u) => W.checked.has(u.hash)) && !W.job) checkNow(); refreshAll(); };
+    btn.onclick = () => { UI.panel = true; refreshAll(); checkVisible(); };
     document.body.appendChild(btn);
   }
   btn.hidden = !on;
@@ -528,6 +600,8 @@ function updateFmtBadge() {
   if (b) { b.textContent = n || ""; b.hidden = !n; }
 }
 function refreshPanel() {
+  // the document makes room for the panel instead of going under it
+  document.body.classList.toggle("wr-open", !!(UI.panel && hostKind()));
   if (!UI.panel || !hostKind()) { if (panel) { panel.classList.remove("open"); const p = panel; setTimeout(() => { if (!UI.panel) p.hidden = true; }, 200); } return; }
   if (!panel) {
     panel = document.createElement("aside");
@@ -551,7 +625,8 @@ function refreshPanel() {
   panel.innerHTML = `
     <div class="wr-ph"><b>Writing assistant</b><span class="tb-spacer"></span><button class="icon small wr-close" title="Close">${ic("x")}</button></div>
     <div class="wr-top">
-      <div class="wr-scorerow">${ring}<div class="wr-sc-t"><b>Overall score</b><span class="note">${shown.length} suggestion${shown.length === 1 ? "" : "s"} · ${checkedN} of ${W?.units.length || 0} checked</span></div><span class="tb-spacer"></span>${W?.job ? `<span class="wr-spin"></span><button class="small wr-stop">Stop</button>` : `<button class="small primary wr-check">Check now</button>`}</div>
+      <div class="wr-scorerow">${ring}<div class="wr-sc-t"><b>Overall score</b><span class="note">${shown.length} suggestion${shown.length === 1 ? "" : "s"} · ${checkedN} of ${W?.units.length || 0} checked</span></div></div>
+      <div class="wr-checks">${W?.job ? `<span class="wr-spin"></span><span class="note">${W.job.scope === "all" ? "Checking the whole document…" : "Checking the text on screen…"}</span><span class="tb-spacer"></span><button class="small wr-stop">Stop</button>` : `<button class="small primary wr-check" title="Check the text on screen (what was checked and hasn't changed isn't sent again)">${ic("search")}<span>Check page</span></button><button class="small wr-check-all" title="Check the whole document">${ic("list-checks")}<span>Whole document</span></button>`}</div>
       <div class="wr-model-line"></div>
       <div class="wr-tiles">${CATS.map((c) => { const n = shown.filter((s) => s.issue.cat === c.id).length; return `<button class="wr-tile${UI.filter === c.id ? " on" : ""}" data-c="${c.id}" style="--c:${c.color}" title="Show only ${c.label}"><b style="${n ? `color:${c.color}` : ""}">${n}</b><span>${c.label}</span></button>`; }).join("")}</div>
       ${W?.tone ? `<div class="wr-tone" style="color:${W.tone.fits ? "#2bb86a" : "#8b5cf6"}">Tone: ${esc(W.tone.tone)} — ${W.tone.fits ? "fits your goals" : "doesn't quite fit your goals"}</div>` : ""}
@@ -559,7 +634,8 @@ function refreshPanel() {
     </div>
     <div class="wr-tabbody"></div>`;
   panel.querySelector(".wr-close").onclick = () => { UI.panel = false; refreshAll(); };
-  panel.querySelector(".wr-check")?.addEventListener("click", () => { if (W) { W.wanted = true; W.error = null; maybeCheck(); } });
+  panel.querySelector(".wr-check")?.addEventListener("click", () => checkVisible());
+  panel.querySelector(".wr-check-all")?.addEventListener("click", () => checkNow());
   panel.querySelector(".wr-stop")?.addEventListener("click", async () => { if (!W?.job) return; const id = W.job.idRef?.id; W.units.forEach((u) => W.pending.delete(u.hash)); W.job = null; W.wanted = false; if (id) (await ai()).cancelAI(id).catch(() => {}); refreshAll(); });
   panel.querySelectorAll(".wr-tile").forEach((b) => (b.onclick = () => { UI.filter = UI.filter === b.dataset.c ? null : b.dataset.c; UI.tab = "suggestions"; refreshPanel(); }));
   panel.querySelectorAll(".wr-tabs button").forEach((b) => (b.onclick = () => { UI.tab = b.dataset.t; refreshPanel(); }));
@@ -574,12 +650,40 @@ function refreshPanel() {
   if (focusPrompt) panel.querySelector(".wr-prompt")?.focus();
 }
 
+/** Take the reader to a suggestion: scroll the passage to the middle, select and flash it.
+ *  Nothing is changed — Accept is a separate click. */
+async function goTo(s) {
+  const u = W?.units[s.unit]; if (!u) return;
+  try { await HOSTS[kind].focus(u, s.issue.original); } catch { /* still try to scroll */ }
+  if (kind === "word") {
+    const wm = await import("./word.js");
+    const rects = await wm.wordAI("marks", { items: [{ block: u.key.block, original: s.issue.original }] }).catch(() => null);
+    const view = wm.wordView();
+    const r = rects?.[0]?.[0];
+    if (view && r) {
+      const [pg, x, y, w, h] = r;
+      const page = view.pages[pg];
+      const sc = view.scroller;
+      const pr = page.getBoundingClientRect(), sr = sc.getBoundingClientRect();
+      sc.scrollTo({ top: sc.scrollTop + (pr.top - sr.top) + y * view.z - sc.clientHeight / 2 + (h * view.z) / 2, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+      const f = document.createElement("div");
+      f.className = "wr-flash";
+      f.style.cssText = `left:${x * view.z - 3}px;top:${y * view.z - 2}px;width:${w * view.z + 6}px;height:${h * view.z + 4}px`;
+      page.appendChild(f);
+      setTimeout(() => f.remove(), 1800);
+    }
+  } else if (kind === "text") {
+    const v = getView();
+    requestAnimationFrame(() => { const mk = [...(v?.contentDOM.querySelectorAll(".wr-u") || [])].find((e) => e.textContent === s.issue.original); if (mk) { mk.classList.remove("wr-flashing"); void mk.offsetWidth; mk.classList.add("wr-flashing"); } });
+  }
+}
+
 function suggestionsTab(body, shown) {
   if (W?.error) body.insertAdjacentHTML("beforeend", `<div class="wr-err">${esc(W.error)}</div>`);
   const list = shown.filter((s) => !UI.filter || s.issue.cat === UI.filter);
   if (!list.length) {
     const all = W && W.units.length && W.units.every((u) => W.checked.has(u.hash));
-    const msg = W?.job ? "Checking your writing…" : all ? "No suggestions — your writing looks great." : !W?.units.length ? "Start writing, and suggestions show up here." : "Press Check now, or turn on Check as you type (Goals).";
+    const msg = W?.job ? (W.job.scope === "all" ? "Checking the whole document…" : "Checking the text on screen…") : all ? "No suggestions — your writing looks great." : !W?.units.length ? "Start writing, and suggestions show up here." : "No suggestions on the part checked so far. The text on screen is checked as you read (Check page); Whole document checks everything.";
     body.insertAdjacentHTML("beforeend", `<div class="wr-empty">${all && !W?.job ? ic("check-circle") : ic("sparkles")}<span>${msg}</span></div>`);
     return;
   }
@@ -594,7 +698,7 @@ function suggestionsTab(body, shown) {
     if (open) issueBody(el, s, { inCard: false });
     else {
       el.innerHTML = `<div class="wr-line1"><span class="wr-dot" style="--c:${c.color}"></span><s>${esc(preview(s.issue.original, 26))}</s><span class="note">→</span><b>${esc(s.issue.replacement ? preview(s.issue.replacement, 30) : "∅")}</b></div><div class="note">${esc(s.issue.title || s.issue.kind)}</div>`;
-      el.onclick = () => { UI.expanded = id; HOSTS[kind]?.focus(u, s.issue.original).catch?.(() => {}); refreshPanel(); };
+      el.onclick = () => { UI.expanded = id; refreshPanel(); goTo(s); };
     }
     body.appendChild(el);
   }
@@ -607,7 +711,7 @@ function goalsTab(body) {
   body.innerHTML = `<p class="note">Set goals to get suggestions that fit what you're writing.</p>
     ${group("Domain", "domain", DOMAINS)}${group("Formality", "formality", FORMALITY)}${group("Audience", "audience", AUDIENCE)}${group("Intent", "intent", INTENT)}
     <div class="wr-g"><b>Language variety</b><select class="wr-variant">${VARIANTS.map(([v, l]) => `<option value="${v}"${g.variant === v ? " selected" : ""}>${l}</option>`).join("")}</select></div>
-    <div class="wr-g"><label class="check"><input type="checkbox" class="wr-auto"${c.auto ? " checked" : ""}> Check as you type <span class="note">(after a pause; every check is a request to your AI provider)</span></label>
+    <div class="wr-g"><label class="check"><input type="checkbox" class="wr-auto"${c.auto ? " checked" : ""}> Check the text on screen automatically <span class="note">(after you stop typing, and 1 s after you stop scrolling; text already checked isn't sent again)</span></label>
       <label class="wr-delay">Pause before checking <input type="number" min="0.6" max="10" step="0.1" value="${(c.delay / 1000).toFixed(1)}"> s</label>
       <label>Double-click a word <select class="wr-dbl"><option value="translate">Translate it</option><option value="meaning">Look up its meaning</option><option value="off">Nothing</option></select></label></div>
     <div class="wr-g"><b>Personal dictionary</b><p class="note">Words here are never flagged. Add them from a suggestion card.</p><div class="wr-chips">${c.dictionary.map((w, i) => `<button class="chip wr-dw" data-i="${i}" title="Remove">${esc(w)} ×</button>`).join("") || `<span class="note">(empty)</span>`}</div></div>`;
@@ -623,7 +727,7 @@ function goalsTab(body) {
   body.querySelectorAll(".wr-dw").forEach((b) => (b.onclick = () => { const d = [...c.dictionary]; d.splice(+b.dataset.i, 1); saveCfg({ dictionary: d }); refreshAll(); }));
 }
 /** New goals: everything is checked again against them. */
-function rehash() { if (W) { W.units = []; W.wanted = true; } collect(); }
+function rehash() { if (W) { W.units = []; W.wanted = "visible"; } collect(); }
 
 function writeTab(body) {
   body.innerHTML = `<p class="note">Compose, rewrite or brainstorm with AI. Works on the selection (or the paragraph at the cursor).</p>
@@ -818,6 +922,9 @@ export function initWriting() {
   if (b) b.onclick = () => { UI.panel = !UI.panel; if (UI.panel) checkNow(); else refreshAll(); };
   // follow the documents
   addEventListener("callio-doc-changed", () => scheduleCollect(400));
+  // scrolling: no checks while it moves; the text on screen is checked 1 s after it stops
+  document.addEventListener("scroll", (e) => { if (W && e.target?.closest?.(".cm-scroller, .wd-scroll, .sh-scroll, #word-view, #sheet-view")) onScrolled(); }, { capture: true, passive: true });
+  document.addEventListener("wheel", (e) => { if (W && e.target?.closest?.(".cm-editor, .wd-scroll, .sh-scroll, #deck-view")) onScrolled(); }, { capture: true, passive: true });
   addEventListener("callio-tab-switched", () => { closeCard(); closeAssist(); scheduleCollect(60); });
   setInterval(() => { const t = activeTab(); const k = hostKind(t); if (k !== kind || (k && t && W !== stateFor(t))) scheduleCollect(0); else if (k) refreshButton(); }, 700);
   scheduleCollect(800);

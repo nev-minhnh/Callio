@@ -196,7 +196,7 @@ export async function invoke(cmd, a, opts) {
         text = "Here is a tighter version of your opening:\n\n```latex\n\\section{Introduction}\\label{sec:intro}\nWe study X.\n```\n\nThe key change is **conciseness**.";
       }
       let out = "";
-      for (const piece of text.match(/.{1,12}/gs)) {
+      for (const piece of text.match(r.id.startsWith("write") ? /.{1,400}/gs : /.{1,12}/gs)) {
         if (cancel) { emit("ai-event", { id: r.id, kind: "error", text: "Stopped" }); throw "Stopped"; }
         out += piece;
         emit("ai-event", { id: r.id, kind: "text", text: piece });

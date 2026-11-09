@@ -2150,3 +2150,13 @@ tr.dv-focus td { box-shadow: inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--a
 .as-note { font-size: 11.5px; }
 .as-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .wr-card .wr-kind, .wr-item .wr-kind { background: none; padding: 0; border-radius: 0; align-self: auto; font-weight: 500; }
+.wr-checks { display: flex; gap: 5px; }
+.wr-flash { position: absolute; z-index: 3; pointer-events: none; border-radius: 4px; box-shadow: 0 0 0 2px var(--gold, #ddb04e); background: color-mix(in srgb, var(--gold, #ddb04e) 22%, transparent); animation: wr-flash 1.8s ease-out both; }
+@keyframes wr-flash { 0%, 55% { opacity: 1; } 100% { opacity: 0; } }
+.wr-u.wr-flashing { animation: wr-flash-t 1.6s ease-out; border-radius: 3px; }
+@keyframes wr-flash-t { 0%, 50% { background: color-mix(in srgb, var(--gold, #ddb04e) 35%, transparent); box-shadow: 0 0 0 2px var(--gold, #ddb04e); } 100% { background: transparent; box-shadow: none; } }
+.wr-checks { display: flex; align-items: center; gap: 6px; min-height: 28px; }
+.wr-checks button { display: inline-flex; align-items: center; gap: 5px; }
+.wr-checks button:not(.primary) { border: 1px solid var(--border); }
+body.wr-open #main { padding-right: min(380px, 92vw); transition: padding-right .2s var(--ease); }
+#main { transition: padding-right .2s var(--ease); }

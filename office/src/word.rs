@@ -199,8 +199,10 @@ pub fn text(w: &mut WordDoc) -> String {
 // ---------------- the writing assistant ----------------
 
 /// Every body paragraph with some text, for the writing assistant.
+/// With where each one is: [page, top] of its start and [page, bottom] of its end (points), so
+/// the window can check only the paragraphs on screen.
 pub fn ai_units(w: &mut WordDoc) -> Json {
-    let list: Vec<Json> = w
+    let found: Vec<(usize, String, usize)> = w
         .session
         .doc
         .body
@@ -210,10 +212,28 @@ pub fn ai_units(w: &mut WordDoc) -> Json {
         .filter_map(|(i, b)| {
             let p = b.as_para()?;
             let t = p.plain_text();
-            (t.trim().chars().count() >= 3).then(|| json!({ "key": { "block": i }, "text": t }))
+            (t.trim().chars().count() >= 3).then(|| (i, t, p.len()))
         })
         .collect();
-    json!({ "rev": w.session.rev(), "units": list })
+    let s = &mut w.session;
+    let l = s.layout();
+    let mut hint = 0;
+    let list: Vec<Json> = found
+        .into_iter()
+        .map(|(i, t, len)| {
+            let a = l.caret_on(&wordcraft_doc::Pos::body(i, 0), hint);
+            if let Some(c) = &a {
+                hint = c.page;
+            }
+            let b = l.caret_on(&wordcraft_doc::Pos::body(i, len), hint);
+            let at = match (a, b) {
+                (Some(a), Some(b)) => json!([a.page, a.top, b.page, b.top + b.height]),
+                _ => Json::Null,
+            };
+            json!({ "key": { "block": i }, "text": t, "at": at })
+        })
+        .collect();
+    json!({ "rev": s.rev(), "units": list })
 }
 
 /// Where `original` is in paragraph `block`: (start, end) byte offsets of its text.

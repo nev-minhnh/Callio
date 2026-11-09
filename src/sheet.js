@@ -992,3 +992,6 @@ export async function sheetAI(op, args = {}) {
   if (op === "insert") throw new Error("Pick a cell and use Replace instead.");
   return null;
 }
+
+/** The cells on screen (for the writing assistant): rows r0…r1, columns c0…c1 (0-based). */
+export function sheetVisible() { if (!S) return null; try { return visible(); } catch { return null; } }

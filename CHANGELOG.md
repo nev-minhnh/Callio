@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.2
+
+- **Writing assistant: click a suggestion to go to it.** The passage scrolls to the middle of the screen, is selected and flashes, so you can read it in context; nothing changes until you press the fix or *Accept*.
+- **Only the text on screen is checked** (automatically, after you stop typing — and 1 s after you stop scrolling; nothing is sent while you scroll). Text that was already checked and hasn't changed is never sent again. *Whole document* (or Ctrl+Alt+G, or right-click → *Check writing with AI*) checks everything, only when you ask. *Check page* checks the text on screen now.
+- The document makes room for the writing panel instead of going under it.
+
 ## 0.12.1
 
 - **Writing assistant, like Grammarly — now in Word documents, presentations and spreadsheets too** (as well as Markdown, LaTeX and text). A round button at the bottom right shows the number of suggestions; its panel has an overall score (0–100), four criteria — **Correctness, Clarity, Engagement, Delivery** — with colour-coded underlines, the document's tone, and tabs for **Suggestions**, **Goals** (domain, formality, audience, intent, English variety, personal dictionary, check as you type), **Write** (compose, rephrase, ideas), **Report** (words, sentences, reading time, most used words, your progress by week) and **Originality** (distinctive sentences searched on the web). Hover an underline for a card: Accept, Dismiss, Add to dictionary. The panel picks the provider and model, effort and thinking.

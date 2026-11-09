@@ -82,6 +82,7 @@ export function kindOf(path) {
   if (IMAGE_EXT.includes(ext)) return "image";
   if (ext === "ipynb") return "ipynb";
   if (ext === "mmd" || ext === "mermaid") return "mermaid";
+  if (["html", "htm", "xhtml", "shtml"].includes(ext)) return "html";
   return "text";
 }
 
@@ -92,7 +93,7 @@ const STRUCT = Object.fromEntries([
   ["yaml", "yaml"], ["yml", "yaml"],
 ]);
 /** Kinds edited as text in the source editor. */
-export const TEXT_KINDS = new Set(["md", "tex", "bib", "text", "json", "xml", "yaml", "csv", "ipynb", "mermaid"]);
+export const TEXT_KINDS = new Set(["md", "tex", "bib", "text", "json", "xml", "yaml", "csv", "ipynb", "mermaid", "html"]);
 
 // ---------- CSV / TSV: each column in its own colour ----------
 const colTags = Array.from({ length: 6 }, () => Tag.define());

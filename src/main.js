@@ -1,3 +1,4 @@
+import { setLanguage } from "./i18n.js";
 import "./styles.css";
 import "./icons.js";
 import { api, listen, IS_TAURI, call, fileSrc } from "./api.js";
@@ -89,6 +90,7 @@ const DEFAULTS = {
   aiProviders: {}, aiWeb: true, aiTools: true, aiInlineEnabled: false, aiInlineDelay: 700, aiSearchBackend: "none", aiSearchUrl: "",
   skillFolders: [], skillUseOwn: true, skillsDisabled: [], avoidLint: true, aiPanel: false, aiPanelWidth: 380, compileOnOpen: true, shellEscape: false, texBin: "",
   overleafUrl: "https://www.overleaf.com", overleafMode: "auto",
+  uiLang: /^vi\b/i.test(navigator.language || "") ? "vi" : "en",
 };
 export let settings = { ...DEFAULTS };
 let saveSettingsTimer;
@@ -114,6 +116,7 @@ function applySettings() {
   $("#sidebar").style.setProperty("--side-w", settings.sideWidth + "px");
   setView(settings.view, false);
   $("#sel-engine").value = settings.engine;
+  setLanguage(settings.uiLang);
 }
 
 // ---------------- UI helpers ----------------
@@ -310,6 +313,78 @@ function renderTabs() {
   updateTitle();
 }
 
+// ---------------- dragging tabs to reorder them ----------------
+// Press on a tab and move: the tab follows the pointer, the others slide out of its way, and it
+// drops into the gap. Pinned tabs stay among the pinned ones, the others among the others.
+let tabDrag = null, tabDragEnded = 0;
+function wireTabDrag() {
+  const bar = $("#tabs");
+  bar.addEventListener("pointerdown", (e) => {
+    const el = e.target.closest(".tab");
+    if (!el || e.button !== 0 || e.target.closest(".close")) return;
+    tabDrag = { el, id: +el.dataset.id || el.dataset.id, x0: e.clientX, started: false, pointer: e.pointerId };
+  });
+  addEventListener("pointermove", (e) => {
+    const d = tabDrag; if (!d) return;
+    const dx = e.clientX - d.x0;
+    if (!d.started) {
+      if (Math.abs(dx) < 6) return;
+      d.started = true;
+      const t = tabs.find((x) => String(x.id) === String(d.el.dataset.id));
+      d.tab = t;
+      d.els = [...bar.querySelectorAll(".tab")].filter((x) => tabs.find((y) => String(y.id) === x.dataset.id)?.pinned === t?.pinned);
+      d.rects = d.els.map((x) => x.getBoundingClientRect());
+      d.from = d.els.indexOf(d.el);
+      d.to = d.from;
+      d.el.classList.add("dragging");
+      bar.classList.add("tab-dragging");
+      try { d.el.setPointerCapture(d.pointer); } catch {}
+    }
+    const r0 = d.rects[d.from];
+    const lo = d.rects[0].left - r0.left, hi = d.rects[d.rects.length - 1].right - r0.right;
+    const x = Math.max(lo, Math.min(hi, dx));
+    d.el.style.transform = `translateX(${x}px)`;
+    // where its middle is now
+    const mid = r0.left + r0.width / 2 + x;
+    let to = d.from;
+    d.rects.forEach((r, i) => { if (i < d.from && mid < r.left + r.width / 2) to = Math.min(to, i); if (i > d.from && mid > r.left + r.width / 2) to = Math.max(to, i); });
+    d.to = to;
+    d.els.forEach((other, i) => {
+      if (other === d.el) return;
+      let shift = 0;
+      if (d.from < to && i > d.from && i <= to) shift = -r0.width;
+      if (d.from > to && i < d.from && i >= to) shift = r0.width;
+      other.style.transform = shift ? `translateX(${shift}px)` : "";
+    });
+    // near the edges: scroll the tab bar
+    const br = bar.getBoundingClientRect();
+    if (e.clientX < br.left + 30) bar.scrollLeft -= 12; else if (e.clientX > br.right - 30) bar.scrollLeft += 12;
+  });
+  const end = () => {
+    const d = tabDrag; tabDrag = null;
+    if (!d?.started) return;
+    tabDragEnded = Date.now();
+    bar.classList.remove("tab-dragging");
+    d.els.forEach((x) => { x.style.transform = ""; x.classList.remove("dragging"); });
+    if (d.to !== d.from && d.tab) {
+      const group = d.els.map((x) => tabs.find((y) => String(y.id) === x.dataset.id));
+      const moved = group.splice(d.from, 1)[0];
+      group.splice(d.to, 0, moved);
+      const pinned = d.tab.pinned;
+      const rest = tabs.filter((x) => !!x.pinned !== !!pinned);
+      tabs.length = 0;
+      tabs.push(...(pinned ? [...group, ...rest] : [...rest, ...group]));
+      if (pinned) savePinned?.();
+      renderTabs();
+      window.dispatchEvent(new Event("callio-tabs-reordered"));
+    }
+  };
+  addEventListener("pointerup", end);
+  addEventListener("pointercancel", end);
+  // a drag isn't a click
+  bar.addEventListener("click", (e) => { if (Date.now() - tabDragEnded < 200) { e.stopPropagation(); e.preventDefault(); } }, true);
+}
+
 function updateTitle() {
   const t = activeTab();
   const title = t ? `${t.dirty ? "● " : ""}${t.name} — Callio` : "Callio";
@@ -371,7 +446,7 @@ export async function activate(id) {
   highlightTree();
   if (!$("#side-history").hidden) refreshHistoryPanel();
   $("#st-path").textContent = t.path || "Unsaved file";
-  $("#st-kind").textContent = { tex: "LaTeX", md: "Markdown", bib: "BibTeX", text: languageName(t), pdf: "PDF", ipynb: "Jupyter notebook", doc: "Word document", sheet: "Spreadsheet", deck: "Presentation", image: "Picture", mermaid: "Mermaid diagram", media: "Media", json: "JSON", xml: "XML", yaml: "YAML", csv: t.delim === "\t" ? "TSV" : "CSV" }[t.kind];
+  $("#st-kind").textContent = { tex: "LaTeX", md: "Markdown", bib: "BibTeX", text: languageName(t), pdf: "PDF", ipynb: "Jupyter notebook", doc: "Word document", sheet: "Spreadsheet", deck: "Presentation", image: "Picture", mermaid: "Mermaid diagram", html: "HTML", media: "Media", json: "JSON", xml: "XML", yaml: "YAML", csv: t.delim === "\t" ? "TSV" : "CSV" }[t.kind];
   $("#app").classList.toggle("kind-csv", t.kind === "csv");
   $("#app").classList.toggle("kind-struct", ["json", "xml", "yaml"].includes(t.kind));
   // CSV/TSV open as a table; other files use the chosen view
@@ -497,7 +572,7 @@ function newTab({ path = null, text = "", kind, mtime = 0, encoding = "utf8", eo
   t.state = createState(VIEW_KINDS.has(kind) ? "" : text, VIEW_KINDS.has(kind) ? "text" : kind, { delim: t.delim });
   tabs.push(t);
   // highlighting for JSON, XML, YAML and code, loaded in the background
-  if (["json", "xml", "yaml", "text"].includes(kind)) loadLanguage(path || t.name).then((ext) => { if (ext) setTabLanguage(t, ext); });
+  if (["json", "xml", "yaml", "text", "html"].includes(kind)) loadLanguage(path || t.name).then((ext) => { if (ext) setTabLanguage(t, ext); });
   return t;
 }
 function detectDelimiterFor(text, name) {
@@ -694,7 +769,7 @@ async function saveTab(t, saveAs = false) {
   historyRecord(t, text, "Saved", "save");
   if (renamed) {
     const k = kindOf(path);
-    if (k !== t.kind) { t.kind = k; if (k === "csv") t.delim = detectDelimiterFor(text, path); t.state = createState(text, k, { delim: t.delim }); if (t.id === activeId) { setState(t.state); activeId = null; await activate(t.id); } if (["json", "xml", "yaml", "text"].includes(k)) loadLanguage(path).then((ext) => ext && setTabLanguage(t, ext)); }
+    if (k !== t.kind) { t.kind = k; if (k === "csv") t.delim = detectDelimiterFor(text, path); t.state = createState(text, k, { delim: t.delim }); if (t.id === activeId) { setState(t.state); activeId = null; await activate(t.id); } if (["json", "xml", "yaml", "text", "html"].includes(k)) loadLanguage(path).then((ext) => ext && setTabLanguage(t, ext)); }
     addRecent(path);
     if (!folder) setFolder(dirname(path)); else refreshTree();
   }
@@ -1324,6 +1399,7 @@ function onDocChanged(immediate = false) {
   const mdEl = $("#md-preview"), pdfWrap = $("#pdf-wrap"), empty = $("#preview-empty"), nbEl = $("#nb-view"), txtEl = $("#txt-preview");
   txtEl.hidden = true;
   const isCsv = t?.kind === "csv", isStruct = ["json", "xml", "yaml"].includes(t?.kind);
+  if (t?.kind !== "html") import("./html.js").then((h) => h.hideHtml());
   $("#csv-view").hidden = !isCsv;
   $("#struct-view").hidden = !isStruct;
   if (!isCsv && csvCtl) { csvCtl.destroy(); csvCtl = null; }
@@ -1336,6 +1412,22 @@ function onDocChanged(immediate = false) {
     mdEl.hidden = true; pdfWrap.hidden = true;
     clearTimeout(mdTimer);
     mdTimer = setTimeout(() => showNotebook(t), immediate ? 0 : 250);
+  } else if (t.kind === "html") {
+    mdEl.hidden = true; pdfWrap.hidden = true;
+    clearTimeout(mdTimer);
+    const run = async () => {
+      const h = await import("./html.js");
+      if (activeTab() !== t) return;
+      const host = h.htmlHost();
+      if (!host.isConnected) $("#preview-pane").appendChild(host);
+      h.showHtml(t, getView().state.doc.toString(), (text) => {
+        // a visual edit: into the source as one undo step
+        const v = getView();
+        if (activeTab() !== t || v.state.doc.toString() === text) return;
+        v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: text }, userEvent: "input.visual" });
+      });
+    };
+    if (immediate) run(); else mdTimer = setTimeout(run, 300);
   } else if (t.kind === "mermaid") {
     pdfWrap.hidden = true; mdEl.hidden = false;
     clearTimeout(mdTimer);
@@ -2230,6 +2322,7 @@ const NEW_TEXT = {
   md: "", txt: "", bib: "", tex: TEMPLATES.tex,
   csv: "Column A,Column B,Column C\n,,\n", tsv: "Column A\tColumn B\tColumn C\n\t\t\n",
   json: "{\n  \n}\n", xml: '<?xml version="1.0" encoding="UTF-8"?>\n<root>\n  \n</root>\n', yaml: "# YAML\nkey: value\n",
+  html: '<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="utf-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1">\n  <title>Untitled</title>\n  <style>\n    body { font-family: system-ui, sans-serif; max-width: 46rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; }\n  </style>\n</head>\n<body>\n  <h1>Untitled</h1>\n  <p>Start writing here.</p>\n</body>\n</html>\n',
   mmd: "flowchart TD\n    A[Start] --> B{Is it working?}\n    B -- Yes --> C[Great]\n    B -- No --> D[Fix it]\n    D --> B\n",
   ipynb: JSON.stringify({ cells: [{ cell_type: "markdown", metadata: {}, source: ["# Untitled notebook"] }, { cell_type: "code", execution_count: null, metadata: {}, outputs: [], source: [] }], metadata: { kernelspec: { name: "python3", display_name: "Python 3", language: "python" }, language_info: { name: "python" } }, nbformat: 4, nbformat_minor: 5 }, null, 1) + "\n",
 };
@@ -2872,6 +2965,7 @@ async function boot() {
   $("#btn-ol-push").onclick = olPush;
   $("#btn-refresh-tree").onclick = refreshTree;
   for (const b of $$("#view-mode button")) b.onclick = () => setView(b.dataset.view);
+  wireTabDrag();
   const showSide = (name) => {
     for (const b of $$(".side-tabs button")) b.classList.toggle("active", b.dataset.side === name);
     for (const s of ["files", "outline", "history", "overleaf"]) { const p = $("#side-" + s), was = p.hidden; p.hidden = s !== name; if (was && !p.hidden) enter(p, "fade", { duration: 150 }); }

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.0
+
+- **Vietnamese interface.** Settings → Editor → *Language*: English or Tiếng Việt (Vietnamese is chosen on first start when Windows is in Vietnamese). It switches at once, without restarting — menus, toolbars, dialogs, panels, tooltips and messages; your documents, file names and AI answers are never changed. The writing assistant's explanations follow the same language.
+- **Writing assistant controls:** *Check page* (the text on screen), *Whole document*, **Pause / Resume** the check that is running (nothing is lost — it goes on from where it stopped), and an **Auto check** switch to start or stop checking the screen automatically.
+- **Reorder open tabs by dragging them.** Pinned tabs stay together at the front.
+- **HTML files**: *Editor* (source with highlighting), *Preview* (drawn as a browser draws it, with its pictures and styles from its folder; scripts don't run), *Split* (both, the preview following as you type) and **Visual edit** — type straight into the page with a small format bar (paragraph style, bold, italic, underline, strikethrough, lists, links, pictures, clear formatting, undo/redo). Only the `<body>` is rewritten, so the `<head>`, styles and scripts stay as you wrote them. *New ▾ → HTML page*.
+
 ## 0.12.3
 
 - The thin moving line at the top no longer runs while a dialog waits for you (opening a file or folder, Save As, signing in, printing) — it only shows while Callio itself is working.

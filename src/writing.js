@@ -325,7 +325,7 @@ function onScrolled() {
  * otherwise only the text on screen. What was checked and hasn't changed is never sent again.
  */
 async function maybeCheck() {
-  if (!W || W.job) return;
+  if (!W || W.job || W.paused) return;
   const c = cfg();
   const scope = W.wanted === "all" ? "all" : W.wanted === "visible" || c.auto ? "visible" : null;
   if (!scope) return;
@@ -378,10 +378,38 @@ async function maybeCheck() {
   if (mine === W && (mine.wanted || cfg().auto)) setTimeout(maybeCheck, 50);
 }
 
+function progressText() {
+  if (!W) return "";
+  const done = W.units.filter((u) => W.checked.has(u.hash)).length;
+  return `${done} of ${W.units.length}`;
+}
+/** Pause: the request that is running is stopped (its paragraphs are checked again later),
+ *  the whole-document check waits, and automatic checks don't start. */
+export async function pauseChecking() {
+  if (!W) return;
+  W.pausedScope = W.job?.scope === "all" || W.wanted === "all" ? "all" : W.job || W.wanted ? "visible" : null;
+  W.paused = true;
+  const id = W.job?.idRef?.id;
+  if (W.job) { W.units.forEach((u) => W.pending.delete(u.hash)); W.job = null; }
+  W.wanted = false;
+  clearTimeout(W.autoT);
+  if (id) (await ai()).cancelAI(id).catch(() => {});
+  status("Checking paused", "ok");
+  refreshAll();
+}
+export function resumeChecking() {
+  if (!W) return;
+  W.paused = false;
+  W.wanted = W.pausedScope || false;
+  W.pausedScope = null;
+  maybeCheck();
+  refreshAll();
+}
+
 /** Check the text on screen now (the round button, Check page). */
 export function checkVisible() {
   if (!hostKind()) return;
-  collect().then(() => { if (W) { if (W.wanted !== "all") W.wanted = "visible"; W.error = null; maybeCheck(); } refreshAll(); });
+  collect().then(() => { if (W) { W.paused = false; if (W.wanted !== "all") W.wanted = "visible"; W.error = null; maybeCheck(); } refreshAll(); });
 }
 
 /** Open the panel and check the whole document (Check writing, Ctrl+Alt+G). */
@@ -389,7 +417,7 @@ export function checkNow() {
   const t = activeTab();
   if (!hostKind(t)) { status("The writing assistant works in Markdown, LaTeX and text files, Word documents, presentations and spreadsheets.", "err"); return; }
   UI.panel = true; UI.tab = "suggestions";
-  collect().then(() => { if (W) { W.wanted = "all"; W.error = null; maybeCheck(); } refreshAll(); });
+  collect().then(() => { if (W) { W.paused = false; W.wanted = "all"; W.error = null; maybeCheck(); } refreshAll(); });
 }
 
 // ---------------------------------------------------------------- 3. suggest: underlines
@@ -626,7 +654,13 @@ function refreshPanel() {
     <div class="wr-ph"><b>Writing assistant</b><span class="tb-spacer"></span><button class="icon small wr-close" title="Close">${ic("x")}</button></div>
     <div class="wr-top">
       <div class="wr-scorerow">${ring}<div class="wr-sc-t"><b>Overall score</b><span class="note">${shown.length} suggestion${shown.length === 1 ? "" : "s"} · ${checkedN} of ${W?.units.length || 0} checked</span></div></div>
-      <div class="wr-checks">${W?.job ? `<span class="wr-spin"></span><span class="note">${W.job.scope === "all" ? "Checking the whole document…" : "Checking the text on screen…"}</span><span class="tb-spacer"></span><button class="small wr-stop">Stop</button>` : `<button class="small primary wr-check" title="Check the text on screen (what was checked and hasn't changed isn't sent again)">${ic("search")}<span>Check page</span></button><button class="small wr-check-all" title="Check the whole document">${ic("list-checks")}<span>Whole document</span></button>`}</div>
+      <div class="wr-checks">
+        <button class="small primary wr-check" title="Check the text on screen (what was checked and hasn't changed isn't sent again)"${W?.job || W?.paused ? " disabled" : ""}>${ic("search")}<span>Check page</span></button>
+        <button class="small wr-check-all" title="Check the whole document"${W?.job?.scope === "all" || W?.paused ? " disabled" : ""}>${ic("list-checks")}<span>Whole document</span></button>
+        ${W?.paused ? `<button class="small wr-resume" title="Go on checking from where it stopped">${ic("play")}<span>Resume</span></button>` : `<button class="small wr-pause" title="Pause the check that is running (and automatic checks) — nothing is lost"${W?.job || W?.wanted ? "" : " disabled"}>${ic("pause")}<span>Pause</span></button>`}
+      </div>
+      <div class="wr-status">${W?.job ? `<span class="wr-spin"></span><span class="note">${W.job.scope === "all" ? `Checking the whole document… ${progressText()}` : "Checking the text on screen…"}</span>` : W?.paused ? `<span class="note">Paused${W.pausedScope === "all" ? ` — whole document, ${progressText()}` : ""}</span>` : `<span class="note">${cfg().auto ? "The text on screen is checked as you read." : "Automatic checking is off."}</span>`}
+        <span class="tb-spacer"></span><label class="switch wr-autosw" title="Start or stop checking the text on screen automatically (after you stop typing, and 1 s after you stop scrolling)"><span>Auto check</span><input type="checkbox"${cfg().auto ? " checked" : ""}><span class="knob"></span></label></div>
       <div class="wr-model-line"></div>
       <div class="wr-tiles">${CATS.map((c) => { const n = shown.filter((s) => s.issue.cat === c.id).length; return `<button class="wr-tile${UI.filter === c.id ? " on" : ""}" data-c="${c.id}" style="--c:${c.color}" title="Show only ${c.label}"><b style="${n ? `color:${c.color}` : ""}">${n}</b><span>${c.label}</span></button>`; }).join("")}</div>
       ${W?.tone ? `<div class="wr-tone" style="color:${W.tone.fits ? "#2bb86a" : "#8b5cf6"}">Tone: ${esc(W.tone.tone)} — ${W.tone.fits ? "fits your goals" : "doesn't quite fit your goals"}</div>` : ""}
@@ -636,7 +670,9 @@ function refreshPanel() {
   panel.querySelector(".wr-close").onclick = () => { UI.panel = false; refreshAll(); };
   panel.querySelector(".wr-check")?.addEventListener("click", () => checkVisible());
   panel.querySelector(".wr-check-all")?.addEventListener("click", () => checkNow());
-  panel.querySelector(".wr-stop")?.addEventListener("click", async () => { if (!W?.job) return; const id = W.job.idRef?.id; W.units.forEach((u) => W.pending.delete(u.hash)); W.job = null; W.wanted = false; if (id) (await ai()).cancelAI(id).catch(() => {}); refreshAll(); });
+  panel.querySelector(".wr-pause")?.addEventListener("click", () => pauseChecking());
+  panel.querySelector(".wr-resume")?.addEventListener("click", () => resumeChecking());
+  panel.querySelector(".wr-autosw input")?.addEventListener("change", (e) => { saveCfg({ auto: e.target.checked }); status(e.target.checked ? "Automatic checking started" : "Automatic checking stopped", "ok"); if (e.target.checked && W && !W.paused) maybeCheck(); refreshAll(); });
   panel.querySelectorAll(".wr-tile").forEach((b) => (b.onclick = () => { UI.filter = UI.filter === b.dataset.c ? null : b.dataset.c; UI.tab = "suggestions"; refreshPanel(); }));
   panel.querySelectorAll(".wr-tabs button").forEach((b) => (b.onclick = () => { UI.tab = b.dataset.t; refreshPanel(); }));
   modelControls({ value: writeModel(), effort: settings.writeEffort, thinking: !!settings.writeThinking, onModel: (v) => { updateSettings({ aiModel_write: v }); }, onEffort: (v) => updateSettings({ writeEffort: v }), onThinking: (v) => updateSettings({ writeThinking: v }) }).then((c) => panel.querySelector(".wr-model-line")?.appendChild(c));

@@ -12,6 +12,11 @@ mod fsops;
 mod history;
 mod library;
 mod memory;
+mod watch;
+mod shellops;
+mod media;
+mod translate;
+mod websearch;
 mod ocr;
 mod localhttp;
 mod overleaf;
@@ -139,7 +144,14 @@ fn main() {
         .manage(claude_code::CcState::default())
         .manage(office::OfficeState::default())
         .setup(|app| {
-            std::thread::spawn(office::clean_temp);
+            websearch::init(app.handle());
+            std::thread::spawn(|| {
+                // after the window is up: tidy old temp files, then warm the office engine's file
+                std::thread::sleep(std::time::Duration::from_secs(4));
+                office::clean_temp();
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                office::prefetch();
+            });
             std::thread::spawn(settings::migrate_secrets);
             let handle = app.handle().clone();
             let s = settings::load_from_disk(&handle);
@@ -250,6 +262,16 @@ fn main() {
             fsops::path_info,
             fsops::compare_dirs,
             fsops::list_dir,
+            watch::fs_watch,
+            shellops::print_file,
+            shellops::launch_program,
+            shellops::list_extractors,
+            shellops::extract_with,
+            media::media_ffmpeg,
+            media::media_transcode,
+            media::media_cancel,
+            translate::translate_google,
+            websearch::web_search_engine,
             fsops::read_binary,
             fsops::pick_open_file,
             fsops::pick_image,

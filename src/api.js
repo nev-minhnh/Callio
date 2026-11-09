@@ -15,16 +15,29 @@ if (isTauri) {
   const mock = await import("./mock.js");
   invokeImpl = mock.invoke;
   listenImpl = mock.listen;
-  convertImpl = (p) => p;
+  convertImpl = (p) => (typeof p === "string" && p.startsWith("/") ? "/__fs?path=" + encodeURIComponent(p) : p);
 }
 
 export const IS_TAURI = isTauri;
 
+// Any wait on the backend longer than half a second shows a thin moving line at the top of the
+// window, so no button ever seems dead (long-running streams with their own display are left out).
+const QUIET = /^(ai_chat|cc_run|cc_login|fs_watch|media_transcode|extract_with|launch_program|show_window|close_ack|exit_app|library_server|office_warm|web_search_engine)$/;
+let busyN = 0, busyT = 0;
+function busyLine(on) {
+  let el = document.getElementById("busy-line");
+  if (!el) { el = document.createElement("div"); el.id = "busy-line"; el.setAttribute("aria-hidden", "true"); document.body?.appendChild(el); }
+  el.classList.toggle("on", on);
+}
 export async function call(cmd, args = {}) {
+  const watch = !QUIET.test(cmd) && !(cmd === "office" && /^(word|deck)\.(key|type|click|pointer|state|render)$|^sheet\.(read|state)$/.test(args?.cmd || ""));
+  if (watch && busyN++ === 0) busyT = setTimeout(() => busyLine(true), 500);
   try {
     return await invokeImpl(cmd, args);
   } catch (e) {
     throw new Error(typeof e === "string" ? e : e?.message || JSON.stringify(e));
+  } finally {
+    if (watch && --busyN === 0) { clearTimeout(busyT); busyLine(false); }
   }
 }
 

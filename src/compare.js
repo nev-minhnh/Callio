@@ -8,6 +8,7 @@ import { enter } from "./motion.js";
 import { ic } from "./icons.js";
 
 const $ = (s, el = document) => el.querySelector(s);
+const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 const extOf = (p) => { const b = basename(p || ""); return b.includes(".") ? b.split(".").pop().toLowerCase() : ""; };
 
@@ -156,12 +157,12 @@ async function textOf(side) {
   }
   if (e === "pdf") {
     const r = await (await import("./pdf.js")).extractText(new Uint8Array(await api.readBinary(path)));
-    return { text: r.pages.map((x, i) => `— page ${i + 1} —\n${x}`).join("\n"), mode: "text", note: "the text of each page" };
+    return { text: r.pages.map((x, i) => `— page ${i + 1} —\n${x}`).join("\n"), mode: "text", note: "the pages", views: ["pages", "doc", "side", "inline"], kind: "pdf" };
   }
   const { office } = await import("./office.js");
   if (WORD.test(e)) {
     const r = await office("doc.open", { path });
-    try { return { text: (await office("doc.markdown", { id: r.id, stem: basename(path).replace(/\.[^.]+$/, "") })).markdown || "", mode: "text", lang: "x.md", note: "the document as Markdown (text, headings, lists, tables)" }; }
+    try { return { text: (await office("doc.markdown", { id: r.id, stem: basename(path).replace(/\.[^.]+$/, "") })).markdown || "", mode: "text", lang: "x.md", note: "the document", views: ["doc", "pages", "side", "inline"], kind: "word" }; }
     finally { office("doc.close", { id: r.id }).catch(() => {}); }
   }
   if (SHEET.test(e)) {
@@ -169,11 +170,13 @@ async function textOf(side) {
     try {
       let out = "";
       const sheets = r.book?.sheets || [{ name: "Sheet1" }];
+      const grids = [];
       for (let i = 0; i < sheets.length; i++) {
         const s = await office("sheet.read", { id: r.id, sheet: i, range: null });
+        grids.push({ name: sheets[i].name, rows: s.rows || [] });
         out += `=== ${sheets[i].name} ===\n` + (s.rows || []).map((row, k) => `${k + 1}\t` + row.map((v) => (Array.isArray(v) ? `${v[0]} {${v[1]}}` : v ?? "")).join("\t")).join("\n") + "\n\n";
       }
-      return { text: out, mode: "text", note: "every sheet, one row per line (formulas in {})" };
+      return { text: out, mode: "text", note: "every sheet", sheets: grids, views: ["table", "side", "inline"], kind: "sheet" };
     } finally { office("sheet.close", { id: r.id }).catch(() => {}); }
   }
   if (DECK.test(e)) {
@@ -189,7 +192,7 @@ async function textOf(side) {
         if (sl.notes) lines.push(`[notes] ${sl.notes}`);
         parts.push(lines.join("\n"));
       }
-      return { text: parts.join("\n\n") + "\n", mode: "text", note: "the text of each slide (titles, shapes, notes)" };
+      return { text: parts.join("\n\n") + "\n", mode: "text", note: "the slides", views: ["pages", "side", "inline"], kind: "deck" };
     }
     finally { office("deck.close", { id }).catch(() => {}); }
   }
@@ -199,7 +202,25 @@ async function textOf(side) {
   const bytes = new Uint8Array(await api.readBinary(path));
   if (looksBinary(bytes)) return { mode: "binary", bytes, size: bytes.length };
   const r = await api.readText(path);
-  return { text: r.text.replace(/\r\n?/g, "\n"), mode: "text", editable: true, encoding: r.encoding, eol: /\r\n/.test(r.text) ? "\r\n" : "\n", mtime: r.mtime };
+  const text = r.text.replace(/\r\n?/g, "\n");
+  const out = { text, mode: "text", editable: true, encoding: r.encoding, eol: /\r\n/.test(r.text) ? "\r\n" : "\n", mtime: r.mtime };
+  if (/^(md|markdown|mdx|txt)$/.test(e)) Object.assign(out, { views: ["doc", "side", "inline"], kind: e === "txt" ? "plain" : "md" });
+  if (/^(csv|tsv)$/.test(e)) Object.assign(out, { views: ["table", "side", "inline"], kind: "csv", sheets: [{ name: "Rows", rows: parseDelimited(text, e === "tsv" ? "\t" : guessSep(text)) }] });
+  return out;
+}
+function guessSep(t) { const l = t.split("\n", 1)[0]; const c = (ch) => l.split(ch).length; return c(";") > c(",") && c(";") > c("\t") ? ";" : c("\t") > c(",") ? "\t" : ","; }
+function parseDelimited(t, sep) {
+  const rows = []; let row = [], f = "", q = false;
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (q) { if (ch === '"') { if (t[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += ch; }
+    else if (ch === '"') q = true;
+    else if (ch === sep) { row.push(f); f = ""; }
+    else if (ch === "\n") { row.push(f); rows.push(row); row = []; f = ""; if (rows.length > 20000) break; }
+    else f += ch;
+  }
+  if (f || row.length) { row.push(f); rows.push(row); }
+  return rows;
 }
 function looksBinary(b) {
   const n = Math.min(b.length, 8000);
@@ -223,7 +244,7 @@ function resultDialog() {
       <div class="dfx-tools">
         <button data-a="prev" title="Previous change (Shift+F7)">${ic("arrow-up")}</button>
         <button data-a="next" title="Next change (F7)">${ic("arrow-down")}</button>
-        <div class="seg"><button data-a="side" class="active" title="Side by side">Side by side</button><button data-a="inline" title="One column, changes inline">Inline</button></div>
+        <div class="seg dfx-views"><button data-a="view" data-v="doc" title="Both files drawn as documents, changed words marked">${ic("file-text")}<span>Document</span></button><button data-a="view" data-v="table" title="Both files as tables, changed cells marked">${ic("table")}<span>Table</span></button><button data-a="view" data-v="pages" title="The pages exactly as they print, side by side, differences tinted">${ic("copy")}<span class="dfx-pages-l">Pages</span></button><button data-a="side" title="The text side by side, line by line">${ic("code")}<span>Text</span></button><button data-a="inline" title="The text in one column, changes inline">Inline</button></div>
         <button data-a="fold" class="toggle on" title="Hide the lines that are the same">${ic("fold")}<span>Hide same</span></button>
         <button data-a="save" class="primary" hidden title="Save the right file with the changes you copied into it">Save right</button>
       </div>
@@ -231,6 +252,7 @@ function resultDialog() {
     </header>
     <div class="dfx-note"></div>
     <div class="dfx-body"></div>`;
+  d.addEventListener("close", () => { current?.vis?.destroy?.(); if (current) current.vis = null; });
   document.body.appendChild(d);
   return d;
 }
@@ -252,12 +274,67 @@ async function compareFiles(a, b, ws, fromFolder = null) {
   try { [A, B] = await Promise.all([textOf(a), textOf(b)]); }
   catch (e) { body.innerHTML = `<div class="dfx-empty">⚠ Couldn't read the files: ${esc(e.message || e)}</div>`; status(""); return; }
   status("");
+  current?.vis?.destroy?.();
   current = { a, b, A, B, ws };
   if (A.mode === "image" && B.mode === "image") return showImages(d, A, B, a, b);
   if (A.mode === "binary" || B.mode === "binary") return showBinary(d, A, B);
-  $(".dfx-note", d).textContent = A.note ? `Comparing ${A.note}.` : "";
   $(".dfx-tools", d).hidden = false;
-  await showText(d, "side");
+  const views = A.views && B.views && A.kind === B.kind ? A.views : ["side", "inline"];
+  current.views = views;
+  for (const btn of d.querySelectorAll(".dfx-views button")) btn.hidden = !views.includes(btn.dataset.v || btn.dataset.a);
+  $(".dfx-pages-l", d).textContent = A.kind === "deck" ? "Slides" : "Pages";
+  await show(d, views[0]);
+}
+
+/** Show the comparison in one of its views (doc, table, pages, side, inline). */
+async function show(d, view) {
+  current.vis?.destroy?.();
+  current.vis = null;
+  for (const btn of d.querySelectorAll(".dfx-views button")) btn.classList.toggle("active", (btn.dataset.v || btn.dataset.a) === view);
+  if (view === "side" || view === "inline") {
+    $('[data-a="fold"]', d).hidden = false;
+    $(".dfx-note", d).textContent = current.A.note ? `Comparing the text of ${current.A.note}, line by line.` : "";
+    return showText(d, view);
+  }
+  const { A, B, a, b } = current;
+  const body = $(".dfx-body", d);
+  current.mv?.destroy?.();
+  current.mv = null;
+  current.layout = view;
+  body.innerHTML = "";
+  const fold = $('[data-a="fold"]', d).classList.contains("on");
+  $('[data-a="fold"]', d).hidden = view === "pages";
+  $('[data-a="save"]', d).hidden = true;
+  const V = await import("./compare-visual.js");
+  let r;
+  try {
+    if (view === "doc") {
+      $(".dfx-note", d).textContent = A.kind === "pdf" ? "The text of each page, as paragraphs: removed words are struck through on the left, new words highlighted on the right." : "Drawn as documents: removed words are struck through on the left, new words highlighted on the right.";
+      r = await V.documentView(body, A.text, B.text, { plain: A.kind === "pdf" || A.kind === "plain", fold, dir: dirname(b.path || "") });
+      $(".dfx-sum", d).innerHTML = r.changes.length ? `<span class="dfx-n">${r.changes.length} changed block${r.changes.length === 1 ? "" : "s"}</span>` : `<span class="dfx-same">✓ No differences</span>`;
+    } else if (view === "table") {
+      $(".dfx-note", d).textContent = "Changed cells show the old value struck through and the new one highlighted; hover a cell for both.";
+      r = V.gridView(body, A.sheets || [], B.sheets || [], { fold });
+      $(".dfx-sum", d).innerHTML = r.changedSheets ? `<span class="dfx-n">${r.changedSheets} sheet${r.changedSheets === 1 ? "" : "s"} changed</span>` : `<span class="dfx-same">✓ No differences</span>`;
+    } else if (view === "pages") {
+      $(".dfx-note", d).textContent = `The ${A.kind === "deck" ? "slides" : "pages"} as they print. Spots that differ are tinted.`;
+      body.innerHTML = `<div class="dfx-loading"><span class="big-spinner"></span> Drawing the ${A.kind === "deck" ? "slides" : "pages"}…</div>`;
+      const src = async (side) => (A.kind === "pdf" ? V.pdfSource(new Uint8Array(await api.readBinary(side.path))) : V.officeSource(side.path, A.kind === "deck" ? "deck" : "word"));
+      const [sa, sb] = await Promise.all([src(a), src(b)]);
+      body.innerHTML = "";
+      const keys = (X) => (X.kind === "pdf" ? X.text.split(/(?:^|\n)— page \d+ —\n/).slice(1) : X.kind === "deck" ? X.text.split(/(?:^|\n\n)— slide \d+/).slice(1) : null);
+      r = V.pagesView(body, sa, sb, { keysA: keys(A), keysB: keys(B) });
+      $(".dfx-sum", d).innerHTML = "";
+    }
+  } catch (e) {
+    body.innerHTML = `<div class="dfx-empty">⚠ Couldn't show this view: ${esc(e.message || e)}</div>`;
+    status(`Compare: ${e.message || e}`, "err");
+    return;
+  }
+  current.vis = r;
+  current.at = -1;
+  if (r?.el) enter(r.el, "fade", { duration: 160 });
+  if (view !== "pages" && r?.changes.length) requestAnimationFrame(() => jump(1));
 }
 
 async function showText(d, layout) {
@@ -311,6 +388,18 @@ async function showText(d, layout) {
 function lines(text, from, to) { if (to <= from) return 0; let n = 1; for (let i = from; i < to - 1 && i < text.length; i++) if (text.charCodeAt(i) === 10) n++; return n; }
 
 async function jump(dir) {
+  if (current?.vis) {
+    const list = current.vis.changes.filter((x) => x.isConnected);
+    if (!list.length) return;
+    current.at = (current.at + dir + list.length) % list.length;
+    const el = list[current.at];
+    for (const x of document.querySelectorAll("#dlg-diff .dv-focus")) x.classList.remove("dv-focus");
+    el.classList.add("dv-focus");
+    el.scrollIntoView({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
+    const n = $(".dfx-sum .dfx-n", resultDialog());
+    if (n && current.layout !== "pages") n.textContent = `change ${current.at + 1} of ${list.length}`;
+    return;
+  }
   const mv = current?.mv;
   if (!mv) return;
   const chunks = await mv.chunksOf();
@@ -435,13 +524,14 @@ document.addEventListener("click", async (e) => {
   if (!current) return;
   if (a === "next") jump(1);
   if (a === "prev") jump(-1);
-  if (a === "side" || a === "inline") showText(d, a);
-  if (a === "fold") { e.target.closest("button").classList.toggle("on"); showText(d, current.layout); }
+  if (a === "side" || a === "inline") show(d, a);
+  if (a === "view") show(d, e.target.closest("[data-v]").dataset.v);
+  if (a === "fold") { e.target.closest("button").classList.toggle("on"); show(d, current.layout); }
   if (a === "save") saveRight();
 });
 document.addEventListener("keydown", (e) => {
   const d = $("#dlg-diff");
-  if (!d?.open || !current?.mv) return;
+  if (!d?.open || !(current?.mv || current?.vis)) return;
   if (e.key === "F7") { e.preventDefault(); jump(e.shiftKey ? -1 : 1); }
 });
 

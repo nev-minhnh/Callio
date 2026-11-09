@@ -46,7 +46,7 @@ async function deliver(name, res, near) {
   if (res.warnings?.length) toast(res.warnings.slice(0, 3).join("\n"), "", 7000);
 }
 
-// Word documents and spreadsheets go through the office engine (WordCraft / GridCraft): headings,
+// Word documents and spreadsheets go through the office engine: headings,
 // lists, tables, footnotes, links, pictures and formatting come out as Markdown.
 const OFFICE = /\.(docx|docm|dotx|dotm|doc|dot|odt|ott|fodt|rtf|xlsx|xlsm|xltx|xls|xlsb|ods)$/i;
 async function viaOffice(path, near) {

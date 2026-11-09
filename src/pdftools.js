@@ -1,4 +1,4 @@
-// PDF tools (the office engine, PdfCraft): organize pages with thumbnails, merge, split, extract,
+// PDF tools (the office engine): organize pages with thumbnails, merge, split, extract,
 // rotate, insert, N-up, crop, page numbers, header & footer, watermark, flatten, metadata,
 // attachments, protect / unlock, redact (by area or by search), compress, repair, and conversions.
 // Every tool writes a new file — the original is never changed — and opens the result.

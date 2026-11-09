@@ -51,6 +51,11 @@ function devBridge() {
           return { rel: k, state, sizeA: sa, sizeB: sb };
         })));
       });
+      server.middlewares.use("/__ls", (req, res) => {
+        const path = new URL(req.url, "http://x").searchParams.get("path");
+        try { res.end(JSON.stringify(fs.readdirSync(path, { withFileTypes: true }).map((e) => ({ name: e.name, path: path.replace(/\/$/, "") + "/" + e.name, isDir: e.isDirectory() })))); }
+        catch (e) { res.statusCode = 404; res.end(String(e)); }
+      });
       server.middlewares.use("/__fs", async (req, res) => {
         const path = new URL(req.url, "http://x").searchParams.get("path");
         try {
@@ -66,7 +71,7 @@ export default defineConfig({
   clearScreen: false,
   plugins: [devBridge()],
   server: { port: 1420, strictPort: true },
-  optimizeDeps: { include: ["yaml", "js-beautify"] },
+  optimizeDeps: { include: ["yaml", "js-beautify", "mermaid"] },
   build: {
     target: "es2022",
     outDir: "dist",

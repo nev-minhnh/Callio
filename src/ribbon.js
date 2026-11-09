@@ -1,5 +1,5 @@
 // The Office-style ribbon shared by Word documents, spreadsheets and presentations.
-// Icons are the ones WordCraft, GridCraft and DeckCraft draw for their own ribbons (exported to SVG,
+// Icons are the office engine's own ribbon icons (exported to SVG,
 // MIT OR Apache-2.0). Every tab after Home is built from the engine's own command catalogue (each
 // command names its tab and group: "Insert › Tables"), so every command the engine has is on the
 // ribbon; Home is laid out by hand like the Office apps.

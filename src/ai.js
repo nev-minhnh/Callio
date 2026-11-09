@@ -55,10 +55,10 @@ export const CC_MODELS = [
   ["claude-opus-4-1", "Opus 4.1"], ["claude-opus-4-0", "Opus 4"], ["claude-sonnet-4-0", "Sonnet 4"],
 ];
 const CC_ALIAS = { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", haiku: "claude-haiku-5-5", fable: "claude-fable-5-1" };
-const isClaudeModel = (v) => isCCModel(v) || (!!v && v.startsWith("anthropic|"));
+export const isClaudeModel = (v) => isCCModel(v) || (!!v && v.startsWith("anthropic|"));
 
 /** Options for every enabled provider (+ Claude Code when on) into a <select>. */
-function fillModelOptions(sel, { claudeCode = false } = {}) {
+export function fillModelOptions(sel, { claudeCode = false } = {}) {
   if (claudeCode && settings.ccEnabled) {
     const g = document.createElement("optgroup");
     g.label = "Claude Code (your Claude plan)";
@@ -118,10 +118,10 @@ export async function runAI(role, opts, on = () => {}) {
       tools: pid !== "claudecode" && !!opts.tools && settings.aiTools !== false, web: pid !== "claudecode" && !!opts.web,
       maxTokens: opts.maxTokens || null, temperature: opts.temperature ?? null,
       projectPath: folder || t?.path || null,
-      searchBackend: settings.aiSearchBackend || "none", searchUrl: settings.aiSearchUrl || "",
+      searchBackend: searchBackendFor(), searchUrl: settings.aiSearchUrl || "",
       skills: opts.tools && settings.aiTools !== false ? skillRefs() : [],
-      effort: role === "chat" ? (settings.aiEffort || null) : null,
-      thinking: role === "chat" && settings.aiThinking !== false,
+      effort: opts.effort !== undefined ? opts.effort || null : role === "chat" ? (settings.aiEffort || null) : null,
+      thinking: opts.thinking !== undefined ? !!opts.thinking : role === "chat" && settings.aiThinking !== false,
     }, id);
   } finally { handlers.delete(id); }
 }
@@ -273,7 +273,7 @@ async function saveSession() {
     const first = chat.history.find((m) => m.role === "user")?.content || "";
     chat.title = String(first).replace(/\s+/g, " ").trim().slice(0, 70) || "Conversation";
   }
-  const session = { v: 1, title: chat.title, created: chat.created, updated: Date.now(), model: modelFor("chat") || "", ccSession: chat.cc.id || "", mem: chat.mem, history: chat.history };
+  const session = { v: 1, title: chat.title, created: chat.created, updated: Date.now(), model: modelFor("chat") || "", ccSession: chat.cc.id || "", mem: chat.mem, history: chat.history, summary: chat.summary || "", summaryUpTo: chat.summaryUpTo || 0 };
   try { await call("sess_put", { project: chat.project, id: chat.sid, session }); } catch (e) { console.warn("session save", e); }
   renderSessBar();
 }
@@ -294,6 +294,7 @@ async function loadSession(id, project = chat.project ?? sessProject()) {
   closeSessMenu();
   chat.sid = id; chat.project = project; chat.title = s.title || ""; chat.created = s.created || Date.now();
   chat.history = Array.isArray(s.history) ? s.history.filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string") : [];
+  chat.summary = s.summary || ""; chat.summaryUpTo = s.summaryUpTo || 0;
   chat.mem = s.mem || chat.mem;
   // Claude Code keeps its own transcript: resume it when the chat model is Claude Code
   chat.cc = { id: s.ccSession && isCCModel(modelFor("chat")) ? s.ccSession : null };
@@ -352,10 +353,10 @@ function onProjectChanged() {
 // ---------------- project memory (recalled with zero model calls) ----------------
 const memOn = () => settings.aiMemory !== false;
 function memProject() { const t = activeTab(); return folder || (t?.path ? dirname(t.path) : ""); }
-async function memRecall(query) {
+async function memRecall(query, before = null) {
   const project = memProject();
   if (!memOn() || !project) return null;
-  try { return await call("mem_recall", { project, query, session: chat.mem, budget: 6000 }); } catch { return null; }
+  try { return await call("mem_recall", { project, query, session: chat.mem, budget: 6000, before }); } catch { return null; }
 }
 /** Keep a turn — under the project and conversation it was asked in (captured at send time). */
 function memRecord(entries, project, session) {
@@ -401,9 +402,45 @@ export function refreshModelSelect() {
   eff.value = settings.aiEffort || "";
   $("#ai-web").classList.toggle("on", settings.aiWeb !== false);
   $("#ai-web").hidden = cc;
+  refreshEngineChip();
   const mode = $("#ai-mode");
   mode.hidden = !cc;
   if (cc) import("./claude-code.js").then((m) => { const c = m.modeChip(); mode.textContent = c.icon; mode.title = `Claude Code: ${c.label} (click to change)`; });
+}
+
+// ---- search engine for the chat (toolbar: globe ▸ engine) ----
+export const SEARCH_ENGINES = [
+  { header: "Web" },
+  ["google", "Google", "#4285f4", "G"], ["coccoc", "Cốc Cốc", "#0f9d58", "C"], ["bing", "Bing", "#0b8484", "B"], ["yahoo", "Yahoo!", "#6001d2", "Y"],
+  ["yandex", "Yandex", "#fc3f1d", "Я"], ["duckduckgo", "DuckDuckGo", "#de5833", "D"], ["baidu", "Baidu", "#2932e1", "百"], ["naver", "Naver", "#03c75a", "N"],
+  ["ecosia", "Ecosia", "#36acb8", "E"], ["brave", "Brave Search", "#fb542b", "b"], ["ask", "Ask.com", "#d1312b", "A"],
+  { header: "Academic" },
+  ["scholar", "Google Scholar", "#4285f4", "S"], ["semantic", "Semantic Scholar", "#1857b6", "S2"], ["openalex", "OpenAlex", "#c8371b", "OA"], ["arxiv", "arXiv", "#b31b1b", "χ"],
+  ["pubmed", "PubMed", "#326599", "P"], ["europepmc", "Europe PMC", "#5a8e3a", "E"], ["crossref", "Crossref", "#3eb1c8", "CR"], ["dblp", "DBLP", "#004c7f", "db"],
+];
+const engineInfo = (id) => SEARCH_ENGINES.find((e) => Array.isArray(e) && e[0] === id);
+const engineDot = (e) => `<span class="eng-dot" style="--c:${e[2]}">${e[3]}</span>`;
+function searchBackendFor() {
+  const e = settings.aiSearchEngine || "auto";
+  if (e !== "auto") return "engine:" + e;
+  const b = settings.aiSearchBackend;
+  return b && b !== "none" ? b : "engine:auto";
+}
+function refreshEngineChip() {
+  const b = $("#ai-engine");
+  if (!b) return;
+  const e = engineInfo(settings.aiSearchEngine || "auto");
+  b.innerHTML = e ? `${engineDot(e)}<span class="eng-name">${e[1]}</span>${ic("chevron-down")}` : `<span class="eng-name">Auto</span>${ic("chevron-down")}`;
+  b.title = e ? `Web search with ${e[1]} — click to choose another search engine` : "Web search: automatic (Claude's own search, otherwise Google) — click to choose a search engine";
+  b.hidden = $("#ai-web").hidden || settings.aiWeb === false;
+}
+function engineMenu(ev) {
+  const cur = settings.aiSearchEngine || "auto";
+  const pick = (id) => { updateSettings({ aiSearchEngine: id }); refreshEngineChip(); const e = engineInfo(id); toast(e ? `The AI will search with ${e[1]}` : "Search engine: automatic", "", 1800); };
+  const items = [{ label: "Automatic", icon: "sparkles", checked: cur === "auto", action: () => pick("auto") }, "-"];
+  for (const e of SEARCH_ENGINES) items.push(Array.isArray(e) ? { label: e[1], icon: engineDot(e), checked: cur === e[0], action: () => pick(e[0]) } : e);
+  const r = ev.currentTarget.getBoundingClientRect();
+  import("./ctxmenu.js").then((m) => m.showContextMenu({ clientX: r.left, clientY: r.bottom + 4 }, items));
 }
 
 function renderContext() {
@@ -582,6 +619,51 @@ async function applyAt(from, to, text, label, expect) {
   v.focus();
 }
 
+// ---------------- conversation window ----------------
+// The model sees the newest messages up to a token budget (about 12k tokens), older long answers
+// shortened. Messages that slide out stay reachable: memory recall may bring them back (no
+// tokens spent), and a long chat gets one short summary, made once by the summary model.
+const HIST_TOKENS = 12000;
+const tokensOf = (s) => Math.ceil(String(s || "").length / 3.6);
+function historyWindow(hist) {
+  const out = [];
+  let used = 0, dropped = 0;
+  for (let i = hist.length - 1; i >= 0; i--) {
+    const m = hist[i];
+    const recent = hist.length - i <= 4;
+    let content = m.content;
+    // older long answers keep their start and end
+    if (!recent && m.role === "assistant" && content.length > 2400) content = content.slice(0, 1500) + "\n… [shortened] …\n" + content.slice(-600);
+    const t = tokensOf(content);
+    if (out.length >= 2 && used + t > HIST_TOKENS) { dropped = i + 1; break; }
+    out.unshift({ role: m.role, content });
+    used += t;
+  }
+  // a conversation must start with the author's message
+  while (out.length && out[0].role !== "user") { out.shift(); dropped++; }
+  const oldestAt = dropped ? hist[dropped]?.at || null : null;
+  return { messages: out, dropped, oldestAt };
+}
+async function ensureSummary(hist, dropped) {
+  // once enough has slid out of the window, summarise it once (and again only much later)
+  if (dropped < 6 || (chat.summary && chat.summaryUpTo >= dropped - 8)) return chat.summary || "";
+  const model = settings.aiModel_summary || null;
+  if (!model && !modelFor("summary")) return chat.summary || "";
+  const part = hist.slice(0, dropped).map((m) => `${m.role === "user" ? "Author" : "Assistant"}: ${m.content.slice(0, 3000)}`).join("\n\n").slice(-60000);
+  try {
+    const text = await runAI("summary", { system: "Summarise this conversation between an author and their writing assistant in at most 12 short bullet points: decisions, facts, file names, open questions. No preamble.", messages: [{ role: "user", content: part }], maxTokens: 700, temperature: 0.2 });
+    if (text?.trim()) { chat.summary = text.trim(); chat.summaryUpTo = dropped; }
+  } catch {}
+  return chat.summary || "";
+}
+/** The per-turn part (current file, selection, memory, summary): sent with the newest message, after the cached part. */
+function turnContext(memText, summary) {
+  let s = contextBlock();
+  if (summary) s += `\n\n# Earlier in this conversation (summary)\n${summary}`;
+  if (memText) s += `\n\n${memText.trim()}`;
+  return s.trim();
+}
+
 async function send(textArg) {
   const input = $("#ai-text");
   const text = (textArg ?? input.value).trim();
@@ -598,7 +680,7 @@ async function send(textArg) {
   const selAtSend = getSelectionInfo();
   const fileAtSend = activeTab()?.path || "", modelAtSend = modelFor("chat") || "";
   addMsg("user", esc(text).replace(/\n/g, "<br>"));
-  hist.push({ role: "user", content: text });
+  hist.push({ role: "user", content: text, at: Date.now() });
   const el = addMsg("assistant", `<div class="ai-tools"></div><div class="ai-body markdown-body"><span class="ai-typing">●●●</span></div><div class="ai-sources"></div>`);
   const body = el.querySelector(".ai-body"), toolsEl = el.querySelector(".ai-tools"), srcEl = el.querySelector(".ai-sources");
   let full = "";
@@ -607,15 +689,19 @@ async function send(textArg) {
   const memAt = { project: memProject(), session: chat.mem };
   $("#ai-send").hidden = true; $("#ai-stop").hidden = false;
   try {
-    const mem = await memRecall(text);
-    let system = baseSystem() + (await skillsPrompt()) + (mem ? await rememberedSkills(mem.skills) : "") + (mem?.text ? `\n\n${mem.text}` : "") + contextBlock();
-    const messages = hist.slice(-20);
+    const win = historyWindow(hist);
+    const [mem, summary] = await Promise.all([memRecall(text, win.oldestAt), ensureSummary(hist, win.dropped)]);
+    // stable first (cached by the provider), per-turn context last
+    let system = baseSystem() + (await skillsPrompt()) + (mem ? await rememberedSkills(mem.skills) : "");
+    const messages = win.messages;
+    const ctxText = turnContext(mem?.text || "", summary);
     if (slash?.skill) {
       // "/skill-name …": this turn follows that skill in full
       const content = await slash.content();
       system += `\n\n# The author asked you to use the skill “${slash.skill.name}” for this message — follow it\n${content.slice(0, 150_000)}`;
       messages[messages.length - 1] = { role: "user", content: slash.rest || `Use the “${slash.skill.name}” skill on my current selection or file.` };
     }
+    if (ctxText) messages[messages.length - 1] = { role: "user", content: `<context>\n${ctxText}\n</context>\n\n${messages[messages.length - 1].content}` };
     const result = runAI("chat", { system, messages, tools: true, web: settings.aiWeb !== false }, (e) => {
       if (e.kind === "text") { think.answer(); full += e.text; stream.set(full); }
       else if (e.kind === "thinking") think.add(e.text || "");
@@ -631,7 +717,7 @@ async function send(textArg) {
       }
     });
     full = await result;
-    hist.push({ role: "assistant", content: full });
+    hist.push({ role: "assistant", content: full, at: Date.now() });
     memRecord([{ role: "user", text, file: fileAtSend, model: modelAtSend, skills: slash?.skill ? [slug(slash.skill.name)] : [] }, { role: "assistant", text: full, model: modelAtSend }], memAt.project, memAt.session);
     if (chat.sid === sidAtSend) saveSession();
     think.done();
@@ -690,7 +776,7 @@ async function sendCC(text, slash) {
 
 function newChat(silent) {
   if (chat.busyId && !silent) return toast("Wait for the current answer to finish.", "", 2500);
-  chat.history = [];
+  chat.history = []; chat.summary = ""; chat.summaryUpTo = 0;
   chat.attached = [];
   chat.cc = { id: null };
   chat.mem = `s${Date.now().toString(36)}`;
@@ -768,9 +854,37 @@ const BUILTINS = [
   { name: "skills", description: "Choose which skills are active", run: async () => { await scanSkills(); openSkillsDialog(); } },
   { name: "remember", description: "Pin a fact, preference or decision for this project (/remember …)", run: null },
   { name: "memory", description: "See or forget what is remembered about this project", run: () => openMemoryDialog() },
+  { name: "brief", description: "A short overview of this project: what it is, what was decided, what's open (made on request only)", run: () => brief() },
   { name: "library", description: "Open the paper library", run: () => import("./library.js").then((m) => m.openLibrary()) },
   { name: "cite", description: "Cite a paper from the library at the cursor (Alt+C)", run: () => import("./cite.js").then((m) => m.openCitePopup()) },
 ];
+/** /brief: an overview of the project from its files and remembered conversations — one AI call, only when asked. */
+async function brief() {
+  const project = memProject();
+  if (!project) return toast("Open a folder first: /brief describes the project in it.", "", 3500);
+  if (!modelFor("summary")) return needModel();
+  addMsg("user", "/brief");
+  const el = addMsg("assistant", `<div class="ai-body markdown-body"><span class="ai-typing">●●●</span></div>`);
+  const body = el.querySelector(".ai-body");
+  try {
+    const mem = await call("mem_list", { project }).catch(() => null);
+    let files = [];
+    try { files = (await api.listDir(project)).filter((x) => !x.name.startsWith(".")).map((x) => (x.isDir ? x.name + "/" : x.name)).slice(0, 120); } catch {}
+    const pins = (mem?.pins || []).map((p) => `- ${p.text}`).join("\n");
+    const turns = (mem?.recent || []).slice(0, 160).reverse().map((t) => `${t.role === "user" ? "Author" : "Assistant"} (${new Date(t.t).toISOString().slice(0, 10)}${t.file ? ", " + basename(t.file) : ""}): ${String(t.text).slice(0, 400)}`).join("\n");
+    const t = activeTab();
+    const doc = t && !["pdf", "doc", "sheet", "deck", "image", "media"].includes(t.kind) ? getView().state.doc.toString().slice(0, 6000) : "";
+    const user = `Project folder: ${basename(project)}\nFiles: ${files.join(", ")}\n\nPinned notes:\n${pins || "(none)"}\n\nRecent conversations (newest last):\n${turns || "(none)"}${doc ? `\n\nStart of the open file ${t.name}:\n${doc}` : ""}`;
+    let full = "";
+    full = await runAI("summary", { system: "Write a brief of this writing/research project for its author, in Markdown: **What it is** (2 sentences), **Where it stands**, **Decisions so far**, **Open questions / next steps** (bullets). Only use what is given; don't invent results or references.", messages: [{ role: "user", content: user }], maxTokens: 900, temperature: 0.2 }, (e) => { if (e.kind === "text") { full += e.text; renderMd(body, full); } });
+    await renderMd(body, full || "_(no answer)_");
+    chat.history.push({ role: "user", content: "/brief", at: Date.now() }, { role: "assistant", content: full, at: Date.now() });
+    saveSession();
+  } catch (e) {
+    if (e.message === "NO_MODEL") return needModel();
+    body.textContent = `Couldn't make the brief: ${e.message}`;
+  }
+}
 const slug = (n) => n.trim().replace(/\s+/g, "-");
 let ccSkillCache = { t: 0, cwd: "", list: [] };
 async function ccSkillList() {
@@ -926,6 +1040,34 @@ export async function runAction(id, custom) {
   } finally { hideWorking(); }
 }
 
+/** Write or change the open Mermaid diagram from a description (a reviewable change). */
+export async function aiMermaid() {
+  const t = activeTab();
+  if (!t || (t.kind !== "mermaid" && t.kind !== "md")) return toast("Open a Mermaid (.mmd) file or a Markdown file first.", "", 3000);
+  const doc = getView().state.doc.toString();
+  const current = t.kind === "mermaid" ? doc : "";
+  const want = await ask({ title: current.trim() ? "Change the diagram" : "Generate a diagram", text: current.trim() ? "What should change? (e.g. “add a review step after Draft”, “make it left to right”)" : "Describe the diagram (flowchart, sequence, class, state, ER, Gantt, mind map, timeline…)", input: "" });
+  if (!want?.trim()) return;
+  if (!modelFor("edit")) return needModel();
+  const system = `You write Mermaid diagrams (mermaid.js v11 syntax). Reply with ONLY the Mermaid source — no explanations, no code fences. Use short, clear labels; quote labels that contain punctuation.`;
+  const user = current.trim() ? `Current diagram:\n${current}\n\nChange: ${want}` : `Diagram to draw: ${want}`;
+  showWorking(current.trim() ? "AI: changing the diagram…" : "AI: drawing the diagram…");
+  try {
+    let out = stripFences(await runAI("edit", { system, messages: [{ role: "user", content: user }], temperature: 0.2 }, (e) => { if (e.kind === "text") workingProgress(e.text.length); }));
+    out = out.replace(/^\s*```(?:mermaid)?\s*|\s*```\s*$/g, "").trim() + "\n";
+    // the diagram must draw before it goes in
+    try { (await import("./mermaid.js")).renderMermaid(out); } catch {}
+    if (t.kind === "mermaid") await applyAt(0, doc.length, out, "AI diagram", { doc: getView().state.doc, from: 0, to: doc.length, text: doc });
+    else {
+      const pos = getView().state.selection.main.head;
+      await applyAt(pos, pos, "\n```mermaid\n" + out + "```\n", "AI diagram", null);
+    }
+  } catch (e) {
+    if (e.message === "NO_MODEL") return needModel();
+    if (!/Stopped/.test(e.message)) toast(`AI: ${e.message}`, "err", 8000);
+  } finally { hideWorking(); }
+}
+
 function stripFences(s) {
   const m = /^\s*```[a-zA-Z]*\n([\s\S]*?)\n?```\s*$/.exec(s);
   return m ? m[1] : s.replace(/^<selected>|<\/selected>$/g, "");
@@ -1063,7 +1205,7 @@ export function renderAISettings() {
     <h3 class="set-h">Claude Code</h3>
     <div id="cc-settings"></div>
     <h3 class="set-h">Models</h3>
-    ${[["chat", "Chat panel"], ["edit", "Rewrites & Fix-with-AI"], ["inline", "Inline completion"]].map(([r, l]) => `
+    ${[["chat", "Chat panel"], ["edit", "Rewrites & Fix-with-AI"], ["write", "Writing suggestions (grammar, style)"], ["translate", "Translation (AI)"], ["summary", "Summaries (long chats, /brief) — a small, cheap model is enough"], ["inline", "Inline completion"]].map(([r, l]) => `
       <label>${l} <select class="m-role" data-role="${r}"></select></label>`).join("")}
     <label>Effort for Claude models (chat)
       <select name="aiEffort"><option value="">Model default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra</option><option value="max">Max — 4× or more usage</option></select></label>
@@ -1073,9 +1215,10 @@ export function renderAISettings() {
     <label>Inline completion delay (ms) <input type="number" name="aiInlineDelay" min="200" max="5000" value="${settings.aiInlineDelay || 700}"></label>
     <h3 class="set-h">Internet</h3>
     <label class="check"><input type="checkbox" name="aiWeb" ${settings.aiWeb !== false ? "checked" : ""}> Let the AI use the internet (search papers, verify citations, read pages)</label>
-    <label>General web search
+    <p class="note">Pick the search engine (Google, Cốc Cốc, Bing, DuckDuckGo, Google Scholar, Semantic Scholar, arXiv, PubMed…) from the chat's toolbar, next to the globe. Engines are read from their own results pages, like in your browser; no key is needed. The services below are used when the toolbar is set to Automatic.</p>
+    <label>Automatic web search uses
       <select name="aiSearchBackend">
-        <option value="none">Built-in only (Claude web search, Perplexity)</option>
+        <option value="none">The model's own search (Claude), otherwise Google</option>
         <option value="brave">Brave Search API</option>
         <option value="tavily">Tavily</option>
         <option value="searxng">SearXNG (your server)</option>
@@ -1298,6 +1441,7 @@ export function initAI() {
     refreshModelSelect(); refreshRoleSelects();
     offerContinue();
   };
+  $("#ai-engine").onclick = engineMenu;
   $("#ai-web").onclick = () => { updateSettings({ aiWeb: settings.aiWeb === false }); refreshModelSelect(); toast(settings.aiWeb !== false ? "AI may use the internet" : "AI internet access off", "", 1800); };
   $("#ai-skill-chip").onclick = async () => { await scanSkills(); openSkillsDialog(); };
   $("#skills-close").onclick = () => $("#dlg-skills").close();

@@ -1,4 +1,4 @@
-// Word documents (.docx, .doc, .odt, .rtf) through the office engine (WordCraft): shown as their
+// Word documents (.docx, .doc, .odt, .rtf) through the office engine: shown as their
 // pages (real text — select, find, copy), exported to PDF / Word / OpenDocument / RTF / HTML /
 // Markdown / LaTeX, or opened as Markdown to edit. Spreadsheets live in sheet.js, PDF tools in
 // pdftools.js; all three talk to callio-office.exe through `office()`.
@@ -14,7 +14,13 @@ export const extOf = (p) => (p || "").toLowerCase().split(".").pop();
 /** Ask the office engine. A password-protected file asks for its password once. */
 export async function office(cmd, args = {}, { password = true } = {}) {
   try {
-    return await call("office", { cmd, args });
+    const r = await call("office", { cmd, args });
+    // command catalogues: no "About …" of the engines, and no engine names in labels or hints
+    if (cmd.endsWith(".commands") && Array.isArray(r)) {
+      const clean = (v) => JSON.parse(JSON.stringify(v).replace(/\b(?:Word|Grid|Deck|Pdf|Light)Craft\b/g, "Callio"));
+      return clean(r.filter((c) => !/^about\b/i.test(c.label || "") && !/(^|\.)about$/i.test(c.id || "")));
+    }
+    return r;
   } catch (e) {
     const m = e.message || String(e);
     if (password && m.startsWith("PASSWORD:") && (args.path !== undefined || args.input !== undefined)) {
@@ -23,7 +29,8 @@ export async function office(cmd, args = {}, { password = true } = {}) {
       if (pw == null) throw new Error("Cancelled");
       return office(cmd, { ...args, password: pw }, { password: true });
     }
-    throw new Error(m.replace(/^PASSWORD:\s*/, ""));
+    // engine messages may name its internal parts: say "Callio" instead
+    throw new Error(m.replace(/^PASSWORD:\s*/, "").replace(/\b(?:Word|Grid|Deck|Pdf|Light)Craft(?:'s)?\b/g, "Callio"));
   }
 }
 
@@ -104,7 +111,7 @@ export async function editAsMarkdown(t) {
   } catch (e) { toast(`Couldn't convert ${t.name}: ${e.message}`, "err", 8000); }
 }
 
-/** Markdown / LaTeX / HTML text from the editor → Word, OpenDocument, RTF (or PDF via WordCraft). */
+/** Markdown / LaTeX / HTML text from the editor → Word, OpenDocument, RTF (or PDF). */
 export async function exportTextAs(t, fmt) {
   const kind = t.kind === "tex" ? "tex" : t.kind === "md" ? "md" : (extOf(t.path || t.name) === "html" ? "html" : "txt");
   const stem = basename(t.path || t.name).replace(/\.[^.]+$/, "");

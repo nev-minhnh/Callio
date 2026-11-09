@@ -84,6 +84,7 @@ export async function invoke(cmd, a, opts) {
     return { text, mtime: 1, encoding };
   }
   if (cmd === "system_ansi") return "windows-1252";
+  if (cmd === "list_dir" && real(a.path)) { const r = await fetch("/__ls?path=" + encodeURIComponent(a.path)); if (!r.ok) throw await r.text(); return await r.json(); }
   if (cmd === "path_info" && real(a.path)) return await (await fetch("/__stat?path=" + encodeURIComponent(a.path))).json();
   if (cmd === "compare_dirs") return await (await fetch(`/__cmpdir?a=${encodeURIComponent(a.a)}&b=${encodeURIComponent(a.b)}`)).json();
   if (cmd === "file_mtime" && real(a.path)) return 1;
@@ -172,7 +173,14 @@ export async function invoke(cmd, a, opts) {
       const isEdit = r.id.startsWith("edit");
       const isInline = r.id.startsWith("inline");
       let text;
-      if (isInline) text = " and the results are consistent across seeds.";
+      if (r.id.startsWith("write")) {
+        const src = r.messages[0].content; const out = [];
+        if (/teh/.test(src)) out.push({ quote: "teh", fix: ["the"], kind: "spelling", why: "Misspelled word." });
+        if (/is very important/.test(src)) out.push({ quote: "is very important", fix: ["matters", "is essential"], kind: "style", why: "Wordy; a stronger verb reads better." });
+        if (/they was/.test(src)) out.push({ quote: "they was", fix: ["they were"], kind: "grammar", why: "Subject–verb agreement." });
+        text = JSON.stringify(out);
+      } else if (r.id.startsWith("translate")) text = "Bản dịch: " + r.messages[0].content;
+      else if (isInline) text = " and the results are consistent across seeds.";
       else if (isEdit) text = "Hello, world! As shown in Section~\\ref{sec:intro}, we cite \\cite{knuth}.";
       else {
         if (r.thinking) for (const w of "The user wants a tighter intro. I should keep the label and citation, cut filler words, and keep it to one sentence.".match(/.{1,10}/gs)) { emit("ai-event", { id: r.id, kind: "thinking", text: w }); await sleep(40); }
@@ -251,6 +259,14 @@ export async function invoke(cmd, a, opts) {
     case "fs_trash": for (const p of a.paths) for (const k of [...files.keys()]) if (k === p || k.startsWith(p + "/")) files.delete(k); return null;
     case "fs_find": { const hits = []; for (const [p, t] of files) if (p.startsWith(a.dir + "/")) String(t).split("\n").forEach((l, i) => { if (l.toLowerCase().includes(a.query.toLowerCase())) hits.push({ path: p, line: i + 1, col: 0, text: l.trim() }); }); return hits; }
     case "open_terminal": return null;
+    case "translate_google": await sleep(300); return { text: `[${a.to}] ${a.text}`, from: "en" };
+    case "web_search_engine": return [{ title: `Result for ${a.query}`, url: "https://example.org/", snippet: "A sample result.", meta: "" }];
+    case "list_extractors": return [{ id: "7zip", name: "7-Zip", exe: "7zG.exe", direct: true }, { id: "tar", name: "Windows (built in)", exe: "tar.exe", direct: true }, { id: "explorer", name: "File Explorer (open the archive)", exe: "explorer.exe", direct: false }];
+    case "extract_with": return { dest: a.archive.replace(/\.[^.]+$/, ""), finished: true };
+    case "launch_program": return null;
+    case "print_file": throw new Error("no print verb");
+    case "media_ffmpeg": return "";
+    case "fs_watch": return null;
     case "list_dir": {
       const out = [];
       const seen = new Set();

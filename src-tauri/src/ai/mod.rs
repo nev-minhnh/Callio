@@ -223,6 +223,27 @@ fn claude_effort_ok(m: &str) -> bool {
 
 const ANTHROPIC_WEB_SEARCH: &str = "web_search_20250305";
 
+/// The messages with a cache breakpoint on the block before the newest user turn (and on the
+/// newest block during tool rounds), so the conversation so far is read from the cache.
+fn with_cache_mark(messages: &[Value]) -> Vec<Value> {
+    let mut out: Vec<Value> = messages.to_vec();
+    let n = out.len();
+    // the newest message is new; the one before it ends the cached part
+    let idx = if n >= 2 && out[n - 1]["role"] == "user" && out[n - 1]["content"].is_string() { n - 2 } else { n.saturating_sub(1) };
+    if let Some(m) = out.get_mut(idx) {
+        if let Some(t) = m["content"].as_str().map(|s| s.to_string()) {
+            if !t.is_empty() {
+                m["content"] = json!([{ "type": "text", "text": t, "cache_control": { "type": "ephemeral" } }]);
+            }
+        } else if let Some(arr) = m["content"].as_array_mut() {
+            if let Some(last) = arr.iter_mut().rev().find(|b| matches!(b["type"].as_str(), Some("text") | Some("tool_result") | Some("tool_use"))) {
+                last["cache_control"] = json!({ "type": "ephemeral" });
+            }
+        }
+    }
+    out
+}
+
 async fn run_anthropic(req: &ChatRequest, ctx: &ToolContext, sink: &mut Sink) -> Result<()> {
     let key = key_for(&req.provider.id).ok_or_else(|| anyhow!("No API key for Claude — add it in Settings → AI."))?;
     let base = req.provider.base_url.trim_end_matches('/');
@@ -230,12 +251,14 @@ async fn run_anthropic(req: &ChatRequest, ctx: &ToolContext, sink: &mut Sink) ->
     let mut tool_defs: Vec<Value> = Vec::new();
     if req.tools {
         for d in tools::definitions(ctx) {
-            if d["name"] == "web_search" {
-                continue; // Claude has its own web search
+            // Claude has its own web search, unless the author picked an engine in the chat
+            let picked = ctx.search_backend.starts_with("engine:") && ctx.search_backend != "engine:auto";
+            if d["name"] == "web_search" && !picked {
+                continue;
             }
             tool_defs.push(json!({"name": d["name"], "description": d["description"], "input_schema": d["parameters"]}));
         }
-        if req.web {
+        if req.web && !(ctx.search_backend.starts_with("engine:") && ctx.search_backend != "engine:auto") {
             tool_defs.push(json!({"type": ANTHROPIC_WEB_SEARCH, "name": "web_search", "max_uses": 5}));
         }
     }
@@ -244,9 +267,12 @@ async fn run_anthropic(req: &ChatRequest, ctx: &ToolContext, sink: &mut Sink) ->
         let new_gen = claude_new_gen(m);
         let think = req.thinking && claude_can_think(m);
         let max = req.max_tokens.unwrap_or(if think { 32000 } else { 8192 });
-        let mut body = json!({"model": req.model, "max_tokens": max, "messages": messages, "stream": true});
+        // prompt caching: the instructions (stable from turn to turn) and everything up to the
+        // newest message are cached, so follow-up turns and tool rounds re-read them at a
+        // fraction of the price; the per-turn context sits in the last message, after the cache
+        let mut body = json!({"model": req.model, "max_tokens": max, "messages": with_cache_mark(&messages), "stream": true});
         if !req.system.is_empty() {
-            body["system"] = json!(req.system);
+            body["system"] = json!([{ "type": "text", "text": req.system, "cache_control": { "type": "ephemeral" } }]);
         }
         if !tool_defs.is_empty() {
             body["tools"] = json!(tool_defs);
@@ -554,6 +580,9 @@ fn summarize_result(out: &str) -> String {
     if let Ok(v) = serde_json::from_str::<Value>(out) {
         if let Some(a) = v.as_array() {
             return format!("{} result(s)", a.len());
+        }
+        if let (Some(e), Some(a)) = (v["engine"].as_str(), v["results"].as_array()) {
+            return format!("{} result(s) from {e}", a.len());
         }
         if let Some(st) = v["status"].as_str() {
             return st.replace('_', " ");

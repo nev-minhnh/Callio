@@ -55,14 +55,18 @@ export function ocrPage(p, scale = 1) {
 
 // ---------- lines ----------
 function newLine(s) {
-  const l = { text: "", x0: s.x0, x1: s.x1, y: s.y, size: s.size, chars: 0, bold: 0, italic: 0, math: 0, mono: 0, sizes: new Map(), spans: [] };
+  const l = { text: "", x0: s.x0, x1: s.x1, y: s.y, size: s.size, chars: 0, bold: 0, italic: 0, math: 0, mono: 0, sizes: new Map(), spans: [], runs: [] };
   addSpan(l, s, false);
   return l;
 }
 function addSpan(l, s, space) {
   const t = s.text;
-  if (space && l.text && !/\s$/.test(l.text) && !/^\s/.test(t)) l.text += " ";
+  const sp = space && l.text && !/\s$/.test(l.text) && !/^\s/.test(t);
+  if (sp) l.text += " ";
   l.text += t;
+  // the same text with its bold / italic, for inline formatting
+  if (sp) l.runs.push({ t: " ", b: false, i: false });
+  l.runs.push({ t, b: !!s.bold && !s.math, i: !!s.italic && !s.math });
   const n = t.replace(/\s+/g, "").length;
   l.chars += n;
   if (s.bold) l.bold += n;
@@ -592,16 +596,16 @@ function chunkBlocks(elems, col, stats, page) {
       if (gap > limit || gap < -0.5 * sz) split = true;
       else if (Math.abs(l.size - p.size) > (page.ocr ? 0.25 : 0.1) * sz) split = true;
       else if ((p.boldFrac > 0.8) !== (l.boldFrac > 0.8) && (p.chars < 80 || l.chars < 80)) split = true;
-      else if (MARKER.test(l.text) && (l.x0 <= cur.lines[0].x0 + 1.2 * l.size || isList)) split = true;
+      else if (MARKER.test(l.text) && (l.x0 <= cur.lines[0].x0 + 1.2 * l.size || isList) && !inlineEnum(p, l, col)) split = true;
       else if (!isList && l.x0 - col.left > 0.6 * l.size && l.x0 - col.left < 5 * l.size && Math.abs(p.x0 - col.left) < 0.6 * l.size && !centered(l)) split = true;
-      else if (centered(l) !== centered(p)) split = true;
+      else if (centered(l) !== centered(p) && !(isHeadingLike(p, stats) && isHeadingLike(l, stats) && Math.abs(l.size - p.size) < 0.1 * sz)) split = true;
       else if (p.x1 < col.right - Math.max(3 * p.size, (col.ragged ? 0.3 : 0.12) * col.width) && END_PUNCT.test(p.text) && !centered(p)) split = true;
       else if (cur.lines.length === 1 && isHeadingLike(p, stats) && !isHeadingLike(l, stats)) split = true;
-      if (!split) { cur.lines.push(l); if (r.segs.length > 1) cur.multiSeg = true; continue; }
+      if (!split) { cur.lines.push(l); cur.segs = null; if (r.segs.length > 1) cur.multiSeg = true; continue; }
       close();
     }
     cur = { type: "text", ocr: !!page.ocr, lines: [l], page: page.index, top: l.top, colLeft: col.left, colWidth: col.width, multiSeg: false };
-    if (r.segs.length > 1) cur.multiSeg = true;
+    if (r.segs.length > 1) { cur.multiSeg = true; cur.segs = r.segs.map((x) => x.text); }
   }
   close();
   for (const b of blocks) if (b.type === "text") finishBlock(b);
@@ -614,19 +618,84 @@ function chunkBlocks(elems, col, stats, page) {
   return blocks;
 }
 
+/** "(2) an evaluation" continuing a full line of prose is an inline enumeration, not a new list item. */
+function inlineEnum(p, l, col) {
+  if (!/^(\(\d{1,2}\)|\d{1,2}\)|\([a-z]\)|[a-z]\))\s/.test(l.text)) return false;
+  const full = p.x1 > col.right - 2.5 * p.size;
+  return full && !/[.:;!?]$/.test(p.text);
+}
+
 function isHeadingLike(l, stats) {
   return (l.size >= stats.body * 1.15 || l.boldFrac > 0.8) && l.chars < 120;
 }
 
+// "out-" + "of-domain", "self-" + "attention": a real hyphen, kept when joining the lines
+const KEEP_HYPHEN = /(?:^|[^A-Za-z])(self|non|cross|multi|out|well|state|fine|task|domain|data|word|sentence|token|real|end|open|few|zero|one|two|three|low|high|semi|long|short|large|small|co|anti|inter|intra|sub|top|left|right|human|machine|hate|target|user|time|rule|graph|text|image|model)[-‐]$/i;
+/** How the next line continues the text so far: "dehyph", "soft", "keep" (the hyphen) or "space". */
+export function joinOf(prev, next) {
+  if (/\u00ad$/.test(prev)) return "soft";
+  if (/[A-Za-zÀ-ÿ][-‐]$/.test(prev) && /^[a-zà-ÿ]/.test(next)) {
+    const first = next.split(/\s/)[0];
+    return /[-‐]/.test(first) || KEEP_HYPHEN.test(prev.slice(-24)) ? "keep" : "dehyph";
+  }
+  return "space";
+}
+/** A line's formatted runs — or its plain text when the runs don't cover it (merged segments). */
+function lineRuns(l) {
+  const flat = (x) => String(x || "").replace(/\s+/g, "");
+  const runs = l.runs || [];
+  return flat(runs.map((r) => r.t).join("")) === flat(l.text) ? runs : [{ t: l.text, b: l.boldFrac > 0.8, i: l.italicFrac > 0.8 }];
+}
+function trimRuns(runs) {
+  const r = (runs || []).map((x) => ({ ...x }));
+  while (r.length && !r[0].t.trim()) r.shift();
+  while (r.length && !r[r.length - 1].t.trim()) r.pop();
+  if (r.length) { r[0].t = r[0].t.replace(/^\s+/, ""); r[r.length - 1].t = r[r.length - 1].t.replace(/\s+$/, ""); }
+  return r;
+}
+function dropLastChar(rich) {
+  for (let k = rich.length - 1; k >= 0; k--) if (rich[k].t) { rich[k].t = rich[k].t.slice(0, -1); return; }
+}
+/** Markdown of formatted runs: **bold**, *italic* (only where the block mixes them). */
+export function richMarkdown(rich, skipChars = 0) {
+  const runs = [];
+  let skip = skipChars;
+  for (const r0 of rich) {
+    let t = String(r0.t || "").replace(/\u00ad/g, "");
+    if (skip > 0) { const cut = Math.min(skip, t.length); t = t.slice(cut); skip -= cut; }
+    if (!t) continue;
+    const p = runs[runs.length - 1];
+    if (p && p.b === !!r0.b && p.i === !!r0.i) p.t += t;
+    else runs.push({ t, b: !!r0.b, i: !!r0.i });
+  }
+  const count = (x) => x.t.replace(/\s/g, "").length;
+  const total = runs.reduce((a, r) => a + count(r), 0) || 1;
+  const allBold = runs.filter((r) => r.b).reduce((a, r) => a + count(r), 0) / total > 0.9;
+  const allItalic = runs.filter((r) => r.i).reduce((a, r) => a + count(r), 0) / total > 0.9;
+  let out = "";
+  for (const r of runs) {
+    const b = r.b && !allBold, i = r.i && !allItalic;
+    const m = r.t.match(/^(\s*)([\s\S]*?)(\s*)$/);
+    const body = escapeMd(m[2]);
+    if (!body || (!b && !i) || !/[\p{L}\p{N}]/u.test(body)) { out += m[1] + body + m[3]; continue; }
+    const mark = b && i ? "***" : b ? "**" : "*";
+    out += m[1] + mark + body + mark + m[3];
+  }
+  return out.replace(/\s+/g, " ").trim();
+}
 function finishBlock(b) {
   let text = "";
+  const rich = [];
   for (const l of b.lines) {
     const t = l.text;
-    if (!text) { text = t; continue; }
-    if (/[A-Za-zÀ-ÿ][-‐­]$/.test(text) && /^[a-zà-ÿ]/.test(t)) text = text.slice(0, -1) + t;
-    else if (/­$/.test(text)) text = text.slice(0, -1) + t;
-    else text += " " + t;
+    if (!text) { text = t; rich.push(...trimRuns(lineRuns(l))); continue; }
+    const j = joinOf(text, t);
+    if (j === "dehyph" || j === "soft") { text = text.slice(0, -1) + t; dropLastChar(rich); }
+    else if (j === "keep") text += t;
+    else { text += " " + t; rich.push({ t: " ", b: false, i: false }); }
+    rich.push(...trimRuns(lineRuns(l)));
   }
+  b.rich = rich;
   b.text = text.replace(/­/g, "").replace(/\s+/g, " ").trim();
   const chars = b.lines.reduce((a, l) => a + l.chars, 0) || 1;
   b.chars = chars;
@@ -663,6 +732,7 @@ function classify(blocks, stats, pages) {
     if (m && b.text.length > m[0].length + 1) {
       b.type = "li";
       b.marker = m[1];
+      b.markerLen = m[0].length;
       b.text = b.text.slice(m[0].length).trim();
       continue;
     }
@@ -740,10 +810,20 @@ function render(blocks, stats, opts) {
   for (const b of blocks) {
     if (b.type === "footnote") { pendingNotes.push(escapeLineStart(escapeMd(b.text.replace(/^(\d{1,2}|[*∗†‡§¶])(?=[A-Z])/, "$1 ")))); notesPage = b.page; continue; }
     if (b.type === "p" && last && last.type === "p" && canContinue(last, b)) {
-      const hy = /[A-Za-zÀ-ÿ][-‐]$/.test(last.text) && /^[a-zà-ÿ]/.test(b.text);
-      last.text = hy ? last.text.slice(0, -1) + b.text : last.text + " " + b.text;
+      const j = joinOf(last.text, b.text);
+      const more = b.rich || [{ t: b.text }];
+      if (j === "dehyph") { last.text = last.text.slice(0, -1) + b.text; if (last.rich) { dropLastChar(last.rich); last.rich.push(...more); } }
+      else if (j === "keep") { last.text += b.text; last.rich?.push(...more); }
+      else { last.text += " " + b.text; last.rich?.push({ t: " " }, ...more); }
       last.chunkLast = b.chunkLast;
-      last.md = escapeLineStart(escapeMd(last.text));
+      last.md = escapeLineStart(last.rich ? richMarkdown(last.rich) : escapeMd(last.text));
+      out[out.length - 1] = last.md;
+      continue;
+    }
+    // a table that continues at the top of the next column or page: its rows join it
+    if (b.type === "p" && b.segs && last && last.type === "table" && b.lines.length === 1 && b.segs.length === last.rows[0].length) {
+      last.rows.push(b.segs.map((t) => escapeMd(t)));
+      last.md = renderTable(last.rows, { header: true });
       out[out.length - 1] = last.md;
       continue;
     }
@@ -760,7 +840,8 @@ function render(blocks, stats, opts) {
         const ordered = /^\d{1,3}[.)]$/.test(b.marker);
         const marker = ordered ? b.marker.replace(")", ".") : "-";
         const keep = !ordered && !BULLET.test(b.marker) ? b.marker + " " : "";
-        md = { md: " ".repeat(4 * level) + marker + " " + escapeMd(keep + b.text), list: true };
+        const body = b.rich && !keep ? richMarkdown(b.rich, b.markerLen || 0) : escapeMd(keep + b.text);
+        md = { md: " ".repeat(4 * level) + marker + " " + body, list: true };
         break;
       }
       case "table": md = renderTable(b.rows, { header: true }); break;
@@ -769,7 +850,7 @@ function render(blocks, stats, opts) {
         if (last && last.type === "formula" && last.page === b.page) continue;
         md = opts.formula ? opts.formula(b) : "<!-- formula-not-decoded -->"; break;
       case "formula-part": continue;
-      default: md = escapeLineStart(escapeMd(b.text));
+      default: md = escapeLineStart(b.type === "p" && b.rich ? richMarkdown(b.rich) : escapeMd(b.text));
     }
     // Docling puts a figure's caption before the picture
     if (b.type === "caption" && last && last.type === "figure" && out.length) {

@@ -1,7 +1,7 @@
 //! Editing photos and pictures (JPEG, PNG, TIFF, WebP, AVIF, HEIC, raw camera files…) with
-//! LightCraft: one LightCraft session per open picture, holding just that photo. Edits are
-//! LightCraft's develop settings (non-destructive until saved); the window shows renders this
-//! module makes (a fitted view, or a window of a zoomed one) and runs LightCraft commands for the
+//! The picture engine: one session per open picture, holding just that photo. Edits are
+//! its develop settings (non-destructive until saved); the window shows renders this
+//! module makes (a fitted view, or a window of a zoomed one) and runs picture commands for the
 //! ribbon, the sliders and the tools drawn on the picture.
 
 use std::sync::{Arc, Mutex};
@@ -62,7 +62,7 @@ pub fn open(path: &str) -> Result<Img, String> {
     }
     let mut s = Session::new().with_fs();
     let r = s.execute("library.import", &json!({ "paths": [src] })).map_err(err)?;
-    let id = r["imported"][0].as_u64().or_else(|| r["existing"][0].as_u64()).ok_or_else(|| format!("{path}: not a picture LightCraft can read"))?;
+    let id = r["imported"][0].as_u64().or_else(|| r["existing"][0].as_u64()).ok_or_else(|| format!("{path}: not a picture Callio can read"))?;
     s.execute("library.select", &json!({ "ids": [id], "active": id })).map_err(err)?;
     let base = s.undo.len();
     s.redo.clear();
@@ -275,7 +275,7 @@ pub fn save(m: &mut Img, out: &str, params: &Json, mark_saved: bool) -> Result<J
             "jpg" | "jpeg" | "jpe" | "jfif" => "jpeg",
             "tif" | "tiff" => "tiff",
             "png" | "webp" | "avif" | "jxl" | "psd" | "dng" => ext.as_str(),
-            _ => return Err(format!("LightCraft can't write .{ext} files: save as JPEG, PNG, TIFF, WebP, AVIF or JPEG XL")),
+            _ => return Err(format!("Callio can't write .{ext} pictures: save as JPEG, PNG, TIFF, WebP, AVIF or JPEG XL")),
         };
         p["format"] = json!(f);
     }

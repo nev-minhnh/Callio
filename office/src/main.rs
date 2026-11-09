@@ -79,6 +79,32 @@ fn handle(st: &Mutex<State>, cmd: &str, a: &Json) -> Result<Json, String> {
     match cmd {
         "ping" => Ok(json!({ "version": env!("CARGO_PKG_VERSION"), "docs": doc::READS, "sheets": sheet::READS })),
 
+        // a new, empty document / workbook / presentation written to `out` (its extension decides)
+        "office.blank" => {
+            let out = s(a, "out").ok_or("missing `out`")?;
+            let ext = std::path::Path::new(&out).extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+            // an empty file just made in the file list is filled in; anything else is never replaced
+            if std::fs::metadata(&out).map(|m| m.len() > 0).unwrap_or(false) {
+                return Err(format!("{out} already exists"));
+            }
+            let bytes = match ext.as_str() {
+                "docx" | "dotx" | "odt" | "rtf" => doc::save(&wordcraft_doc::Document::new(), &ext)?,
+                "xlsx" | "xltx" | "ods" => {
+                    let wb = gridcraft_model::Workbook::new();
+                    gridcraft_engine::io::save_bytes(&wb, &out).map_err(|e| e.to_string())?
+                }
+                "pptx" => {
+                    let mut ses = deckcraft_engine::Session::new();
+                    ses.execute("file.new", &json!({})).map_err(|e| e.to_string())?;
+                    ses.execute("file.save", &json!({ "path": out, "format": ext })).map_err(|e| e.to_string())?;
+                    return Ok(json!({ "out": out }));
+                }
+                _ => return Err(format!("Can't create a blank .{ext} file")),
+            };
+            std::fs::write(&out, bytes).map_err(|e| format!("{out}: {e}"))?;
+            Ok(json!({ "out": out }))
+        }
+
         // ---------- documents ----------
         "doc.open" => {
             let path = s(a, "path").ok_or("missing `path`")?;

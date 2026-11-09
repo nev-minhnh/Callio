@@ -177,6 +177,36 @@ pub async fn write_text(path: String, text: String, encoding: Option<String>, ex
 const HIDDEN_DIRS: &[&str] = &[".git", ".callio", ".proemia", ".quire", "node_modules", "__pycache__", ".vscode", ".idea", "_minted", "svg-inkscape"];
 const JUNK_EXT: &[&str] = &["aux", "fls", "fdb_latexmk", "synctex.gz", "out", "toc", "lof", "lot", "blg", "bcf", "run.xml", "xdv", "nav", "snm", "vrb", "callio-tmp", "proemia-tmp", "quire-tmp"];
 
+/// Hidden and temporary entries the file tree never shows: dot files, Office lock files (~$…),
+/// temp files, Windows' hidden and system files, build leftovers.
+pub fn hidden_entry(e: &std::fs::DirEntry, name: &str, is_dir: bool) -> bool {
+    let l = name.to_lowercase();
+    if name.starts_with('.') || name.starts_with('~') || name.starts_with('$') || name.ends_with('~') {
+        return true;
+    }
+    if is_dir {
+        if HIDDEN_DIRS.contains(&name) || l == "system volume information" {
+            return true;
+        }
+    } else if is_junk(name)
+        || ["thumbs.db", "ehthumbs.db", "desktop.ini"].contains(&l.as_str())
+        || [".tmp", ".temp", ".swp", ".swo", ".crdownload", ".part", ".partial", ".pyc", ".pyo"].iter().any(|x| l.ends_with(x))
+    {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        // FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM
+        if e.metadata().map(|m| m.file_attributes() & 0x6 != 0).unwrap_or(false) {
+            return true;
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = e;
+    false
+}
+
 pub fn is_junk(name: &str) -> bool {
     let l = name.to_lowercase();
     JUNK_EXT.iter().any(|e| l.ends_with(&format!(".{e}"))) || l.ends_with(".synctex(busy)")
@@ -188,10 +218,7 @@ pub async fn list_dir(path: String) -> CmdResult<Vec<DirEntry>> {
     for e in std::fs::read_dir(&path).es()?.flatten() {
         let name = e.file_name().to_string_lossy().to_string();
         let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        if is_dir && (HIDDEN_DIRS.contains(&name.as_str()) || name.starts_with('.')) {
-            continue;
-        }
-        if !is_dir && (name.starts_with('.') || is_junk(&name) || name.ends_with('~')) {
+        if hidden_entry(&e, &name, is_dir) {
             continue;
         }
         v.push(DirEntry { path: e.path().to_string_lossy().to_string(), name, is_dir });

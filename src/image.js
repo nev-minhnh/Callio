@@ -1,6 +1,6 @@
 // Pictures and photos (JPEG, PNG, TIFF, WebP, AVIF, HEIC, raw camera files…) edited with
-// LightCraft, in the office engine: a ribbon of commands, the adjustment panels on the right
-// (every LightCraft slider, with the histogram), and the picture in the middle — zoom, pan, crop,
+// The picture engine (in the office engine): a ribbon of commands, the adjustment panels on the right
+// (every slider, with the histogram), and the picture in the middle — zoom, pan, crop,
 // white balance picker, healing, red eye and masks are drawn on it. Edits stay adjustable until
 // the picture is saved. Renders are made in the engine and shown as they arrive: while a slider
 // moves, quick drafts at screen size; when it stops, the full-quality picture.
@@ -98,8 +98,10 @@ export function imageHost() {
       <button class="small im-before-btn" title="Show the picture without the edits (\\)">${ic("contrast")}<span>Before</span></button>
       <button class="icon small im-zo" title="Zoom out (Ctrl+−)">${ic("minus")}</button><button class="small im-zoom" title="Fit / 100% (Z)">Fit</button><button class="icon small im-zi" title="Zoom in (Ctrl++)">${ic("plus")}</button>
       <button class="small im-panel-btn" title="Show or hide the adjustments">${ic("sliders")}<span>Adjust</span></button>
+      <label class="switch im-edit-sw" title="Back to the picture preview (your edits are kept)"><span>Edit</span><input type="checkbox" checked><span class="knob"></span></label>
     </div>`;
   wire();
+  host.querySelector(".im-edit-sw input").onchange = (e) => { if (!e.target.checked) { e.target.checked = true; window.dispatchEvent(new CustomEvent("callio-image-preview")); } };
   return host;
 }
 
@@ -855,8 +857,8 @@ function buildRibbon() {
     ] },
     { name: "Masking", groups: [
       { name: "Create", items: [B("Brush", IC.brush, tool("mask-brush")), B("Linear Gradient", IC.linear, tool("mask-linear")), B("Radial Gradient", IC.radial, tool("mask-radial")),
-        { t: "stack", items: [S("Color Range", IC.color, tool("mask-color")), S("Luminance Range", IC.lum, tool("mask-lum")), S("Sky", IC.sky, { cmd: "mask.add", params: { kind: "sky" }, title: "Select the sky (needs LightCraft's AI model)" })] },
-        { t: "stack", items: [S("Subject", IC.person, { cmd: "mask.add", params: { kind: "subject" }, title: "Select the subject (needs LightCraft's AI model)" }), S("Background", IC.person, { cmd: "mask.add", params: { kind: "background" } })] }] },
+        { t: "stack", items: [S("Color Range", IC.color, tool("mask-color")), S("Luminance Range", IC.lum, tool("mask-lum")), S("Sky", IC.sky, { cmd: "mask.add", params: { kind: "sky" }, title: "Select the sky (needs the picture AI model)" })] },
+        { t: "stack", items: [S("Subject", IC.person, { cmd: "mask.add", params: { kind: "subject" }, title: "Select the subject (needs the picture AI model)" }), S("Background", IC.person, { cmd: "mask.add", params: { kind: "background" } })] }] },
       { name: "Mask", items: [{ t: "stack", items: [S("Invert", IC.invert, { cmd: "mask.invert" }), S("Duplicate", IC.dup, { cmd: "mask.duplicate" }), S("Duplicate & Invert", IC.invert, { cmd: "mask.duplicate", params: { invert: true } })] },
         { t: "stack", items: [S("Delete", IC.trash, { cmd: "mask.delete" }), S("Delete All", IC.trash, { cmd: "mask.deleteAll" }), S("Show Masks Panel", IC.mask, { action: () => { I.maskPanel = !I.maskPanel; updateMasksPanel(); drawOverlay(); }, on: () => I?.maskPanel })] }] },
       { name: "Brush", items: [{ t: "stack", items: [S("Smaller [", IC.zoomout, { action: () => { brushSize = Math.max(0.005, brushSize / 1.25); drawOverlay(); } }), S("Larger ]", IC.zoomin, { action: () => { brushSize = Math.min(0.5, brushSize * 1.25); drawOverlay(); } })] }] },
@@ -875,7 +877,7 @@ function buildRibbon() {
       { name: "Compare", items: [B("Before", IC.before, { action: toggleBefore, on: () => I?.before }), { t: "stack", items: [S("Copy After → Before", IC.copy, { cmd: "beforeAfter.copyAfterToBefore" }), S("Copy Before → After", IC.paste, { cmd: "beforeAfter.copyBeforeToAfter" }), S("Swap", IC.fliph, { cmd: "beforeAfter.swap" })] }, { t: "stack", items: [S("Before = Import", IC.reset, { cmd: "beforeAfter.resetBefore" }), S("Before = Current", IC.copy, { cmd: "beforeAfter.setBefore", params: { source: "current" } })] }] },
     ] },
   ];
-  // every other LightCraft command, by family, so nothing is out of reach
+  // every other picture command, by family, so nothing is out of reach
   const used = new Set(JSON.stringify(tabs).match(/"cmd":"([^"]+)"/g)?.map((x) => x.slice(7, -1)));
   const fam = new Map();
   for (const c of I.cmds.values()) {
@@ -1042,7 +1044,7 @@ export async function saveImage(t, saveAs = false) {
   let out = t.path;
   if (saveAs || !WRITES[ext]) {
     if (!saveAs) {
-      const r = await ask({ title: `Save ${t.name}`, text: `Callio can't write .${ext} files (${/^(cr2|cr3|nef|arw|dng|raf|orf|rw2|pef|srw)$/.test(ext) ? "a camera raw file is never changed" : "not a format LightCraft writes"}). Save the edited picture as a new file next to it? The original stays as it is.`, buttons: [{ label: "Cancel", value: null }, { label: "Keep edits in a sidecar (.xmp)", value: "xmp" }, { label: "Save as JPEG / TIFF…", value: "copy", primary: true }] });
+      const r = await ask({ title: `Save ${t.name}`, text: `Callio can't write .${ext} files (${/^(cr2|cr3|nef|arw|dng|raf|orf|rw2|pef|srw)$/.test(ext) ? "a camera raw file is never changed" : "Callio can't write this format"}). Save the edited picture as a new file next to it? The original stays as it is.`, buttons: [{ label: "Cancel", value: null }, { label: "Keep edits in a sidecar (.xmp)", value: "xmp" }, { label: "Save as JPEG / TIFF…", value: "copy", primary: true }] });
       if (!r) return false;
       if (r === "xmp") {
         try { await q("image.save", { out: t.path, params: { format: "original" }, markSaved: true }).then((x) => apply(x.state)); status(`Edits saved next to ${t.name} (.xmp)`, "ok"); return true; }
@@ -1088,7 +1090,7 @@ registerUndo("image", {
   step: async (t, n, redo) => { if (I?.t !== t) return; const r = await q("image.undoN", { n, redo }); apply(r.state); },
 });
 
-/** For the AI: LightCraft commands on an open picture as one undo step. */
+/** For the AI: picture commands on an open picture as one undo step. */
 export async function aiBatch(t, commands, label) {
   const r = await office("image.batch", { id: t.imageId, commands, label });
   if (I?.t === t) apply(r.state); else t.imageState = r.state;

@@ -17,33 +17,48 @@
       <div class="tb-group">
         <div class="menu-wrap">
           <button id="btn-new" title="New file (Ctrl+N)" aria-haspopup="menu" aria-expanded="false">New <span class="caret">▾</span></button>
-          <div id="menu-new" class="menu" role="menu" hidden>
-            <button role="menuitem" data-new="md"><span class="fi md">MD</span><span>Markdown file</span><kbd>Ctrl+N</kbd></button>
-            <button role="menuitem" data-new="tex"><span class="fi tex">TeX</span><span>LaTeX document</span></button>
-            <button role="menuitem" data-new="bib"><span class="fi bib">BIB</span><span>BibTeX file</span></button>
-            <button role="menuitem" data-new="other"><span class="fi"><svg class="ic" aria-hidden="true"><use href="#ic-file"/></svg></span><span>Other file (any extension)…</span></button>
-            <button role="menuitem" data-new="folder"><span class="fi"><svg class="ic" aria-hidden="true"><use href="#ic-folder"/></svg></span><span>New folder…</span></button>
+          <div id="menu-new" class="menu menu-new" role="menu" hidden>
+            <div class="menu-h">Documents</div>
+            <button role="menuitem" data-new="md"><span class="fb md">MD</span><span>Markdown</span><kbd>Ctrl+N</kbd></button>
+            <button role="menuitem" data-new="docx"><span class="fb doc">DOCX</span><span>Word document</span><kbd></kbd></button>
+            <button role="menuitem" data-new="tex"><span class="fb tex">TEX</span><span>LaTeX document</span><kbd></kbd></button>
+            <button role="menuitem" data-new="txt"><span class="fb text">TXT</span><span>Plain text</span><kbd></kbd></button>
+            <div class="menu-h">Spreadsheets and data</div>
+            <button role="menuitem" data-new="xlsx"><span class="fb sheet">XLSX</span><span>Excel workbook</span><kbd></kbd></button>
+            <button role="menuitem" data-new="csv"><span class="fb data">CSV</span><span>CSV table</span><kbd></kbd></button>
+            <button role="menuitem" data-new="tsv"><span class="fb data">TSV</span><span>TSV table</span><kbd></kbd></button>
+            <button role="menuitem" data-new="json"><span class="fb data">JSON</span><span>JSON</span><kbd></kbd></button>
+            <button role="menuitem" data-new="yaml"><span class="fb data">YML</span><span>YAML</span><kbd></kbd></button>
+            <button role="menuitem" data-new="xml"><span class="fb data">XML</span><span>XML</span><kbd></kbd></button>
+            <div class="menu-h">Slides, diagrams and more</div>
+            <button role="menuitem" data-new="pptx"><span class="fb deck">PPTX</span><span>PowerPoint presentation</span><kbd></kbd></button>
+            <button role="menuitem" data-new="mmd"><span class="fb diagram">MMD</span><span>Mermaid diagram</span><kbd></kbd></button>
+            <button role="menuitem" data-new="ipynb"><span class="fb code">NB</span><span>Jupyter notebook</span><kbd></kbd></button>
+            <button role="menuitem" data-new="bib"><span class="fb bib">BIB</span><span>BibTeX library</span><kbd></kbd></button>
+            <div class="menu-sep"></div>
+            <button role="menuitem" data-new="other"><span class="fb file"><svg class="ic" aria-hidden="true"><use href="#ic-file"/></svg></span><span>Other file (any extension)…</span><kbd></kbd></button>
+            <button role="menuitem" data-new="folder"><span class="fb dir"><svg class="ic" aria-hidden="true"><use href="#ic-folder"/></svg></span><span>New folder…</span><kbd></kbd></button>
           </div>
         </div>
         <div class="menu-wrap">
           <button id="btn-open" title="Open (Ctrl+O)" aria-haspopup="menu" aria-expanded="false">Open <span class="caret">▾</span></button>
           <div id="menu-open" class="menu" role="menu" hidden>
-            <button role="menuitem" data-act="open-file"><span>Open file…</span><kbd>Ctrl+O</kbd></button>
-            <button role="menuitem" data-act="open-folder"><span>Open folder…</span><kbd>Ctrl+Shift+O</kbd></button>
+            <button role="menuitem" data-act="open-file"><span class="fi"><svg class="ic" aria-hidden="true"><use href="#ic-file"/></svg></span><span>Open file…</span><kbd>Ctrl+O</kbd></button>
+            <button role="menuitem" data-act="open-folder"><span class="fi"><svg class="ic" aria-hidden="true"><use href="#ic-folder"/></svg></span><span>Open folder…</span><kbd>Ctrl+Shift+O</kbd></button>
           </div>
         </div>
         <div class="menu-wrap">
           <button id="btn-save" title="Save (Ctrl+S)" aria-haspopup="menu" aria-expanded="false">Save <span class="caret">▾</span></button>
           <div id="menu-save" class="menu" role="menu" hidden>
-            <button role="menuitem" data-act="save"><span>Save</span><kbd>Ctrl+S</kbd></button>
-            <button role="menuitem" data-act="save-as"><span>Save as…</span><kbd>Ctrl+Shift+S</kbd></button>
-            <div class="menu-sep"></div>
-            <button role="menuitem" data-act="export-pdf"><span>Export as PDF…</span><kbd>Ctrl+Shift+E</kbd></button>
-            <button role="menuitem" data-act="export-md"><span>Export as Markdown…</span><kbd>Ctrl+Shift+M</kbd></button>
-            <button role="menuitem" data-act="export-docx"><span>Export as Word / OpenDocument…</span></button>
-            <button role="menuitem" data-act="convert-md"><span>Convert a file to Markdown…</span></button>
-            <div class="menu-sep"></div>
-            <button role="menuitem" data-act="pdf-tools"><span>PDF tools…</span><kbd>merge, split, compress…</kbd></button>
+            <button role="menuitem" data-act="save"><span class="fi"><svg class="ic" aria-hidden="true"><use href="#ic-save"/></svg></span><span>Save</span><kbd>Ctrl+S</kbd></button>
+            <button role="menuitem" data-act="save-as"><span class="fi"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></span><span>Save as…</span><kbd>Ctrl+Shift+S</kbd></button>
+            <button role="menuitem" data-act="save-all"><span class="fi"><svg class="ic" aria-hidden="true"><use href="#ic-list-checks"/></svg></span><span>Save all</span><kbd>Ctrl+Alt+S</kbd></button>
+            <div class="menu-h">Export a copy</div>
+            <button role="menuitem" data-act="export-pdf"><span class="fi"><svg class="ic" aria-hidden="true"><use href="#ic-file-text"/></svg></span><span>PDF…</span><kbd>Ctrl+Shift+E</kbd></button>
+            <button role="menuitem" data-act="export-docx"><span class="fi"><svg class="ic" aria-hidden="true"><use href="#ic-doc-word"/></svg></span><span>Word document…</span><kbd></kbd></button>
+            <button role="menuitem" data-act="export-md"><span class="fi"><svg class="ic" aria-hidden="true"><use href="#ic-md-file"/></svg></span><span>Markdown…</span><kbd>Ctrl+Shift+M</kbd></button>
+            <div class="menu-h">Convert</div>
+            <button role="menuitem" data-act="convert-md"><span class="fi"><svg class="ic" aria-hidden="true"><use href="#ic-refresh"/></svg></span><span>Another file to Markdown…</span><kbd></kbd></button>
           </div>
         </div>
         <div id="undo-group" class="undo-group">
@@ -134,6 +149,8 @@
           <button data-fmt="display" class="icon small" title="Equation"><svg class="ic" aria-hidden="true"><use href="#ic-sigma"/></svg></button>
           <button data-fmt="footnote" class="icon small" title="Footnote"><svg class="ic" aria-hidden="true"><use href="#ic-footnote"/></svg></button>
           <button data-fmt="cite" class="small" title="Cite from your library (Alt+C)"><svg class="ic" aria-hidden="true"><use href="#ic-library"/></svg><span>Cite</span></button>
+          <span class="sep"></span>
+          <button id="btn-write" class="small" title="Writing suggestions: spelling, grammar, style… with your AI model (Ctrl+Alt+G). Right-click selected text to translate it."><svg class="ic" aria-hidden="true"><use href="#ic-wand"/></svg><span>Suggestions</span><span class="wr-count" hidden></span></button>
         </div>
         <div id="code-bar" hidden>
           <span class="cb-kind"></span>
@@ -166,6 +183,10 @@
           <button class="icon" data-mdz="in" title="Zoom in (Ctrl+=)"><svg class="ic" aria-hidden="true"><use href="#ic-plus"/></svg></button>
           <button data-mdz="fit" title="Fit the page to the pane">Fit</button>
           <span class="sep"></span>
+          <span class="mmd-only sep"></span>
+          <button class="mmd-only" data-mmd="ai" title="Generate or change the diagram with AI"><svg class="ic" aria-hidden="true"><use href="#ic-sparkles"/></svg><span>AI</span></button>
+          <button class="mmd-only" data-mmd="svg" title="Save the diagram as SVG">SVG</button>
+          <button class="mmd-only" data-mmd="png" title="Save the diagram as PNG">PNG</button>
           <button data-mdz="mirror" title="Line up the preview with the visual editor: same width and every line at the same height"><svg class="ic" aria-hidden="true"><use href="#ic-compare"/></svg><span>Match editor</span></button>
         </div>
         <div id="nb-view" hidden></div>
@@ -271,6 +292,7 @@
           </select>
           <button id="ai-mode" class="icon small" hidden></button>
           <button id="ai-web" class="icon small toggle" title="Allow internet: web search, reading pages, verifying citations"><svg class="ic" aria-hidden="true"><use href="#ic-globe"/></svg></button>
+          <button id="ai-engine" class="small ai-engine" aria-haspopup="menu" hidden></button>
           <div class="menu-wrap">
             <button id="ai-more" class="icon small" title="More" aria-haspopup="menu"><svg class="ic" aria-hidden="true"><use href="#ic-more"/></svg></button>
             <div class="menu right" role="menu" hidden>
@@ -427,7 +449,7 @@
           </section>
           <section data-sec="about" hidden>
             <div class="about-hero"><img src="/callio-logo.png" alt="" draggable="false" /><div><h3>Callio <span id="about-version"></span></h3><p class="about-slogan">Shape your folio</p></div></div>
-            <p>A lightweight editor for Markdown, LaTeX, Word documents, spreadsheets, presentations, PDF and pictures. Built with Rust (Tauri), CodeMirror, KaTeX, PDF.js and the storytold Craft engines (WordCraft, GridCraft, DeckCraft, PdfCraft, LightCraft).</p>
+            <p>A lightweight editor for Markdown, LaTeX, Word documents, spreadsheets, presentations, PDF and pictures. Built with Rust (Tauri), CodeMirror, KaTeX, PDF.js and Callio's own engines for documents, spreadsheets, presentations, PDF and pictures.</p>
             <p class="note">Open source under the MIT or Apache-2.0 licence · <a href="#" data-url="https://github.com/nev-minhnh/Callio">github.com/nev-minhnh/Callio</a></p>
             <p class="note">Settings: <span class="mono" id="about-paths"></span></p>
             <h4>Uninstall</h4>

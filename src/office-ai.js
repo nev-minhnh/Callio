@@ -133,7 +133,7 @@ export async function officeCommands({ kind, query }) {
     if (!query) list.unshift({ id: "develop.set", label: `Set sliders: {values: {id: number}} — slider ids: ${sliders}`, where: "", params: "" });
   } else if (kind === "deck") {
     const t = getTabs().find((x) => x.deckId);
-    if (!t) return "Open a presentation in Callio first (or call deck_edit with commands from DeckCraft: slide.new, insert.textBox, shape.insert, text.replace, slide.notes…).";
+    if (!t) return "Open a presentation in Callio first (or call deck_edit with presentation commands: slide.new, insert.textBox, shape.insert, text.replace, slide.notes…).";
     list = (await office("deck.commands", { id: t.deckId })).map((c) => ({ id: c.id, label: c.label, where: (c.menu || []).join(" › "), params: c.params }));
   } else {
     list = (await office("word.commands", {})).map((c) => ({ id: c.id, label: c.label, where: c.where, params: c.params }));

@@ -62,6 +62,7 @@ import { initOverleaf, refreshOverleafPanel, handleSignInError } from "./overlea
 import { initHistory, record as historyRecord, refreshHistoryPanel } from "./history.js";
 import { initAI, toggleAIPanel, openActionMenu, fixError, refreshAIContext } from "./ai.js";
 import { initInline } from "./ai-inline.js";
+import { initWriting } from "./writing.js";
 import * as mirror from "./mirror.js";
 import { initUndo, refreshUndo, registerUndo } from "./undo.js";
 import { enter, leave, cascade, settle, tabIn, tabOut, reduced } from "./motion.js";
@@ -73,6 +74,9 @@ import { initCodeTools, updateCodeTools, showProblems } from "./codetools.js";
 import { guessIndent } from "./structured.js";
 import { isReviewing, endReview, setKindGetter, refreshExtraExtensions, addEditorExtension, reapplyExtras, editorLineTop, replaceDocAsStep, undoList, undoSteps } from "./editor.js";
 import { ic } from "./icons.js";
+import { fileBadge, isHiddenName, categoryOf } from "./filetypes.js";
+import { loading, withLoading } from "./loading.js";
+import { showContextMenu } from "./ctxmenu.js";
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => document.querySelectorAll(s);
@@ -113,10 +117,21 @@ function applySettings() {
 }
 
 // ---------------- UI helpers ----------------
+let lastToast = { msg: "", at: 0 };
 export function toast(msg, kind = "", ms = 4200) {
+  if (!msg) return;
+  // the same message twice in a row (a status that also toasts): once is enough
+  const now = performance.now();
+  // (also when one says the same as the other, only shorter: "Saved a.docx" after "Saved a.docx (…)")
+  if (now - lastToast.at < 1500 && (lastToast.msg === msg || lastToast.msg.startsWith(msg + " ") || lastToast.msg.startsWith(msg + " ("))) return;
+  lastToast = { msg, at: now };
   const el = document.createElement("div");
   el.className = "toast " + kind;
-  el.textContent = msg;
+  el.setAttribute("role", kind === "err" ? "alert" : "status");
+  el.innerHTML = `${ic(kind === "err" ? "x-circle" : kind === "ok" ? "check-circle" : kind === "warn" ? "warning" : "info", "toast-ic")}<span class="toast-msg"></span>`;
+  el.querySelector(".toast-msg").textContent = msg;
+  el.onclick = () => leave(el, "right", { duration: 160 });
+  if (kind === "err" && ms < 6000) ms = 6000;
   const box = $("#toasts");
   // many at once: the oldest goes
   while (box.children.length >= 4) box.firstElementChild.remove();
@@ -125,6 +140,8 @@ export function toast(msg, kind = "", ms = 4200) {
   setTimeout(() => leave(el, "right", { duration: 180 }), ms);
 }
 export function status(msg, kind = "") {
+  // finished actions (saved, converted, exported…) and failures always pop up too
+  if (msg && (kind === "ok" || kind === "err")) toast(msg, kind, kind === "err" ? 7000 : 3200);
   const el = $("#st-msg");
   if (el.textContent === msg && el.className === kind) return;
   el.textContent = msg;
@@ -168,7 +185,7 @@ export function ask({ title, text = "", input, password = false, vertical = fals
 
 // ---------------- tabs ----------------
 /** Tabs without a text editor: shown by the PDF viewer or the spreadsheet grid. */
-const VIEW_KINDS = new Set(["pdf", "doc", "sheet", "deck", "image"]);
+const VIEW_KINDS = new Set(["pdf", "doc", "sheet", "deck", "image", "media"]);
 let tabs = [];
 let activeId = null;
 let nextId = 1;
@@ -176,20 +193,116 @@ export const activeTab = () => tabs.find((t) => t.id === activeId) || null;
 export const getTabs = () => tabs;
 
 const seenTabs = new Set();
+// ---------------- Mermaid diagrams: export, AI ----------------
+let mmdWired = false;
+function mermaidBar(t) {
+  for (const b of $$("#md-toolbar .mmd-only")) b.hidden = t?.kind !== "mermaid";
+  if (mmdWired) return;
+  mmdWired = true;
+  for (const b of $$("#md-toolbar [data-mmd]")) b.onclick = async () => {
+    const tab = activeTab();
+    const a = b.dataset.mmd;
+    if (a === "ai") return import("./ai.js").then((m) => m.aiMermaid());
+    const m = await import("./mermaid.js");
+    const stem = (tab?.name || "diagram").replace(/\.[^.]+$/, "");
+    const out = await api.pickSaveFile(`${stem}.${a}`, tab?.path ? dirname(tab.path) : folder);
+    if (!out) return;
+    try {
+      if (a === "svg") { const svg = m.diagramSvg($("#md-preview")); if (!svg) throw new Error("Nothing is drawn yet"); await api.writeText(out, svg, "utf8", 0); }
+      else { const blob = await m.diagramPng($("#md-preview")); if (!blob) throw new Error("Nothing is drawn yet"); await api.writeBinary(out, new Uint8Array(await blob.arrayBuffer()), 0, false); }
+      status(`Saved ${basename(out)}`, "ok");
+      if (folder) refreshTree();
+    } catch (e) { status(`Couldn't save the diagram: ${e.message || e}`, "err"); }
+  };
+}
+
+// ---------------- tab menu: close, pin, save, print, file actions ----------------
+function pinTab(t, on = !t.pinned) {
+  t.pinned = on;
+  renderTabs();
+  savePinned();
+  status(on ? `Pinned ${t.name}` : `Unpinned ${t.name}`);
+}
+function savePinned() { try { localStorage.setItem("callio.pinned", JSON.stringify(tabs.filter((x) => x.pinned && x.path).map((x) => x.path))); } catch {} }
+export function wasPinned(path) { try { return (JSON.parse(localStorage.getItem("callio.pinned") || "[]")).some((p) => norm(p) === norm(path)); } catch { return false; } }
+async function closeTabs(list) {
+  for (const x of list) { if (!tabs.includes(x)) continue; await closeTab(x.id); }
+}
+async function printTab(t) {
+  if (t.path && !t.dirty && t.kind !== "md" && t.kind !== "csv") {
+    try { await call("print_file", { path: t.path }); return status(`Sent ${t.name} to the printer`, "ok"); }
+    catch (e) { /* no print verb for this type: print what's on screen */ }
+  }
+  if (t.id !== activeId) await activate(t.id);
+  setTimeout(() => window.print(), 60);
+}
+async function renameTab(t) {
+  const name = (await ask({ title: "Rename", text: `New name for ${t.name}`, input: t.name }))?.trim();
+  if (!name || name === t.name) return;
+  if (t.dirty && !(await saveTab(t))) return;
+  try {
+    const to = await api.renamePath(t.path, name, folder || dirname(t.path));
+    await retargetTabs(t.path, to);
+    status(`Renamed to ${name}`, "ok");
+    refreshTree();
+  } catch (e) { status(`Couldn't rename ${t.name}: ${e.message || e}`, "err"); }
+}
+function tabMenu(e, t) {
+  const i = tabs.indexOf(t);
+  const others = tabs.filter((x) => x !== t);
+  const isPdf = t.kind === "pdf";
+  const items = [
+    { label: "Close", key: "Ctrl+W", icon: "x", action: () => closeTab(t.id) },
+    { label: "Close Multiple Tabs", icon: "copy", sub: [
+      { label: "Close All BUT This", disabled: !others.length, action: () => closeTabs(others.filter((x) => !x.pinned)) },
+      { label: "Close All BUT Pinned", disabled: !tabs.some((x) => !x.pinned), action: () => closeTabs(tabs.filter((x) => !x.pinned)) },
+      { label: "Close All to the Left", disabled: i <= 0, action: () => closeTabs(tabs.slice(0, i).filter((x) => !x.pinned)) },
+      { label: "Close All to the Right", disabled: i >= tabs.length - 1, action: () => closeTabs(tabs.slice(i + 1).filter((x) => !x.pinned)) },
+      { label: "Close All Unchanged", disabled: !tabs.some((x) => !x.dirty && !x.pinned), action: () => closeTabs(tabs.filter((x) => !x.dirty && !x.pinned)) },
+      "-",
+      { label: "Close All", action: () => closeTabs([...tabs]) },
+    ] },
+    { label: t.pinned ? "Unpin Tab" : "Pin Tab", icon: "pin", action: () => pinTab(t) },
+    "-",
+    { label: "Save", key: "Ctrl+S", icon: "save", disabled: !t.dirty && !!t.path, action: async () => { if (t.id !== activeId) await activate(t.id); cmdSave(false); } },
+    { label: "Save As…", key: "Ctrl+Shift+S", icon: "copy", action: async () => { if (t.id !== activeId) await activate(t.id); cmdSave(true); } },
+    { label: "Print…", key: "Ctrl+P", icon: "printer", action: () => printTab(t) },
+    t.path && "-",
+    isPdf && { label: "Convert to Word to edit", icon: `<span class="fb doc long">DOCX</span>`, action: () => import("./convertactions.js").then((m) => m.pdfToWord(t.path)) },
+    isPdf && { label: "Convert to Markdown to edit", icon: `<span class="fb md">MD</span>`, action: () => import("./convertactions.js").then((m) => m.pdfToMarkdown(t.path)) },
+    t.path && { label: "Open into", icon: "external", sub: [
+      { label: "Default App", icon: "external", action: () => api.openPath(t.path).catch((er) => status(er.message, "err")) },
+      { label: "File Explorer", key: "Shift+Alt+R", icon: "folder", action: () => api.revealPath(t.path) },
+      { label: "Terminal", icon: "code", action: () => call("open_terminal", { dir: dirname(t.path) }) },
+    ] },
+    t.path && { label: "Reveal in File List", icon: "sidebar", action: () => { if (!settings.sidebar) updateSettings({ sidebar: true }); highlightTree(true); revealInTree(t.path, true); } },
+    t.path && { label: "Add File to Chat", icon: "sparkles", action: () => import("./ai.js").then((m) => m.addToChat(t.path, false)) },
+    t.path && "-",
+    t.path && { label: "Copy Path", key: "Shift+Alt+C", icon: "copy", action: () => navigator.clipboard.writeText(t.path).then(() => status("Path copied", "ok")) },
+    t.path && { label: "Copy Relative Path", icon: "copy", action: () => navigator.clipboard.writeText(relOf(t.path)).then(() => status("Relative path copied", "ok")) },
+    t.path && { label: "Rename…", key: "F2", icon: "pen", action: () => renameTab(t) },
+  ].filter(Boolean);
+  showContextMenu(e, items);
+}
+
 function renderTabs() {
   const bar = $("#tabs");
   bar.innerHTML = "";
+  // pinned tabs stay on the left
+  const order = [...tabs.filter((x) => x.pinned), ...tabs.filter((x) => !x.pinned)];
+  if (order.some((x, i) => x !== tabs[i])) { tabs.length = 0; tabs.push(...order); }
   for (const t of tabs) {
     const el = document.createElement("div");
     el.dataset.id = t.id;
     if (!seenTabs.has(t.id)) { seenTabs.add(t.id); requestAnimationFrame(() => tabIn(el)); }
-    el.className = "tab" + (t.id === activeId ? " active" : "") + (t.dirty ? " dirty" : "");
-    el.title = t.path || "Unsaved";
-    el.innerHTML = `<span class="kind">${{ tex: "TeX", md: "MD", bib: "BIB", pdf: "PDF", ipynb: "NB", doc: "DOC", sheet: "XLS", deck: "PPT", image: "IMG", json: "JSON", xml: "XML", yaml: "YML", csv: t.delim === "\t" ? "TSV" : "CSV" }[t.kind] || "TXT"}</span><span class="name"></span><button class="close" title="Close (Ctrl+W)"><span>${ic("x")}</span></button>`;
+    el.className = "tab" + (t.id === activeId ? " active" : "") + (t.dirty ? " dirty" : "") + (t.pinned ? " pinned" : "");
+    el.title = (t.path || "Unsaved") + (t.pinned ? " · pinned" : "");
+    el.innerHTML = `${fileBadge(t.path || t.name || "untitled.txt")}<span class="name"></span>${t.pinned ? `<button class="close pin" title="Unpin">${ic("pin")}</button>` : `<button class="close" title="Close (Ctrl+W)"><span>${ic("x")}</span></button>`}`;
     el.querySelector(".name").textContent = t.name;
     el.onclick = (e) => { if (!e.target.closest(".close")) activate(t.id); };
-    el.onauxclick = (e) => { if (e.button === 1) closeTab(t.id); };
-    el.querySelector(".close").onclick = () => closeTab(t.id);
+    el.onauxclick = (e) => { if (e.button === 1 && !t.pinned) closeTab(t.id); };
+    el.querySelector(".close").onclick = () => (t.pinned ? pinTab(t, false) : closeTab(t.id));
+    el.oncontextmenu = (e) => tabMenu(e, t);
     bar.appendChild(el);
     if (t.id === activeId) requestAnimationFrame(() => el.scrollIntoView({ block: "nearest", inline: "nearest" }));
   }
@@ -243,6 +356,7 @@ export async function activate(id) {
   $("#app").classList.toggle("word-mode", t.kind === "doc");
   $("#app").classList.toggle("deck-mode", t.kind === "deck");
   $("#app").classList.toggle("image-mode", t.kind === "image");
+  $("#app").classList.toggle("media-mode", t.kind === "media");
   $("#app").classList.toggle("nb-mode", t.kind === "ipynb" && !t.nbRaw);
   if (!isPdf) {
     t.state = refreshExtraExtensions(refreshStateOptions(t.state, t.indent), t.kind);
@@ -257,7 +371,7 @@ export async function activate(id) {
   highlightTree();
   if (!$("#side-history").hidden) refreshHistoryPanel();
   $("#st-path").textContent = t.path || "Unsaved file";
-  $("#st-kind").textContent = { tex: "LaTeX", md: "Markdown", bib: "BibTeX", text: languageName(t), pdf: "PDF", ipynb: "Jupyter notebook", doc: "Word document", sheet: "Spreadsheet", deck: "Presentation", image: "Picture", json: "JSON", xml: "XML", yaml: "YAML", csv: t.delim === "\t" ? "TSV" : "CSV" }[t.kind];
+  $("#st-kind").textContent = { tex: "LaTeX", md: "Markdown", bib: "BibTeX", text: languageName(t), pdf: "PDF", ipynb: "Jupyter notebook", doc: "Word document", sheet: "Spreadsheet", deck: "Presentation", image: "Picture", mermaid: "Mermaid diagram", media: "Media", json: "JSON", xml: "XML", yaml: "YAML", csv: t.delim === "\t" ? "TSV" : "CSV" }[t.kind];
   $("#app").classList.toggle("kind-csv", t.kind === "csv");
   $("#app").classList.toggle("kind-struct", ["json", "xml", "yaml"].includes(t.kind));
   // CSV/TSV open as a table; other files use the chosen view
@@ -270,20 +384,48 @@ export async function activate(id) {
   $("#fmt-bar").hidden = !(t.kind === "md" || t.kind === "tex");
   syncVisualMode(t);
   $("#app").classList.toggle("kind-md", t.kind === "md");
+  $("#app").classList.toggle("kind-mermaid", t.kind === "mermaid");
+  mermaidBar(t);
   if (t.kind === "tex") await ensureTexPreview(t);
   if (t.kind !== "doc") import("./word.js").then((m) => m.hideWord());
   if (t.kind !== "deck") import("./deck.js").then((m) => m.hideDeck());
-  if (t.kind !== "image") import("./image.js").then((m) => m.hideImage());
+  if (t.kind !== "image") { import("./image.js").then((m) => m.hideImage()); import("./viewer.js").then((m) => m.hidePreview()); }
+  if (t.kind !== "media") import("./media.js").then((m) => m.hideMedia());
   settle($("#editor-pane")); settle($("#preview-pane"));
   if (t.kind === "sheet") await showSheetTab(t);
   else if (t.kind === "doc") { (await import("./sheet.js")).hideSheet(); await showWordTab(t); }
   else if (t.kind === "deck") { (await import("./sheet.js")).hideSheet(); await showDeckTab(t); }
   else if (t.kind === "image") { (await import("./sheet.js")).hideSheet(); await showImageTab(t); }
+  else if (t.kind === "media") { (await import("./sheet.js")).hideSheet(); await showMediaTab(t); }
   else if (isPdf) { (await import("./sheet.js")).hideSheet(); await showPdfTab(t); }
   refreshUndo();
 }
 
+window.addEventListener("callio-image-preview", () => { const t = activeTab(); if (t?.kind === "image") { t.imgEdit = false; import("./viewer.js").then((v) => v.forgetPreview(t)); showImageTab(t); } });
+async function showMediaTab(t) {
+  const m = await import("./media.js");
+  const h = m.mediaHost();
+  if (!h.isConnected) $("#preview-pane").appendChild(h);
+  $("#pdf-wrap").hidden = true;
+  try { await m.openMedia(t); }
+  catch (e) { status(`Couldn't open ${t.name}: ${e.message}`, "err"); }
+}
+
 async function showImageTab(t) {
+  // pictures open in the light viewer; the editor starts when "Edit" is switched on
+  if (!t.imgEdit) {
+    const v = await import("./viewer.js");
+    (await import("./image.js")).hideImage();
+    const ph = v.previewHost();
+    if (!ph.isConnected) $("#preview-pane").appendChild(ph);
+    $("#pdf-wrap").hidden = true;
+    return v.showPreview(t, { onEdit: (tab) => { tab.imgEdit = true; if (tab === activeTab()) showImageTab(tab); }, onOpen: (p) => openPath(p) });
+  }
+  (await import("./viewer.js")).hidePreview();
+  const busy = loading(`Starting the photo editor…`, { delay: 200, detail: t.name });
+  try { await openImageEditor(t); } finally { busy.done(); }
+}
+async function openImageEditor(t) {
   const m = await import("./image.js");
   const h = m.imageHost();
   if (!h.isConnected) $("#preview-pane").appendChild(h);
@@ -387,9 +529,19 @@ async function readTextFile(path, encoding) {
 export async function openPath(path, line) {
   const existing = tabs.find((t) => t.path && norm(t.path) === norm(path));
   if (existing) { await activate(existing.id); if (line) gotoLine(line); return existing; }
-  const k = kindOf(path);
-  if (k === "pdf" || k === "doc" || k === "sheet" || k === "deck" || k === "image") {
+  const cat = categoryOf(path);
+  // archives and programs are never read as text: extract / run them (after asking)
+  if (cat === "archive") { await openArchive(path); return null; }
+  if (cat === "exe") { await confirmLaunch(path); return null; }
+  if (cat === "font" || cat === "book") {
+    const r = await ask({ title: `Open ${basename(path)}?`, text: `Callio can't show ${cat === "font" ? "font files" : "e-books"}. Open it with its usual app?`, buttons: [{ label: "Cancel", value: null }, { label: "Open with default app", value: "ext", primary: true }] });
+    if (r) api.openPath(path).catch((e) => toast(e.message, "err"));
+    return null;
+  }
+  const k = cat === "video" || cat === "audio" ? "media" : kindOf(path);
+  if (k === "pdf" || k === "doc" || k === "sheet" || k === "deck" || k === "image" || k === "media") {
     const t = newTab({ path, kind: k });
+    t.pinned = wasPinned(path);
     t.mtime = await api.fileMtime(path).catch(() => 0);
     addRecent(path);
     await activate(t.id);
@@ -400,19 +552,74 @@ export async function openPath(path, line) {
     api.openPath(path).catch((e) => toast(e.message, "err"));
     return null;
   }
+  const busy = loading(`Opening ${basename(path)}…`, { delay: 220 });
   try {
+    const info = await call("path_info", { path }).catch(() => null);
+    if (info?.size > 64 * 1024 * 1024 && k === "text") {
+      busy.done();
+      const r = await ask({ title: `${basename(path)} is large`, text: `This file is ${(info.size / 1048576).toFixed(0)} MB. Opening it as text may be slow. Open it anyway, or with its usual app?`, buttons: [{ label: "Cancel", value: null }, { label: "Default app", value: "ext" }, { label: "Open here", value: "open", primary: true }] });
+      if (r === "ext") { api.openPath(path).catch((e) => toast(e.message, "err")); return null; }
+      if (r !== "open") return null;
+    }
+    if (info?.size > 2 * 1024 * 1024) busy.text(`Opening ${basename(path)}…`, `${(info.size / 1048576).toFixed(1)} MB`);
     const { text, mtime, encoding, eol } = await readTextFile(path);
+    busy.done();
+    // a binary file of a type Callio doesn't know: don't show it as garbage text
+    if (k === "text" && text.slice(0, 65536).includes("\u0000")) {
+      const r = await ask({ title: `${basename(path)} isn't a text file`, text: "Callio can't show this kind of file. Open it with its usual app instead?", buttons: [{ label: "Cancel", value: null }, { label: "Show as text anyway", value: "text" }, { label: "Open with default app", value: "ext", primary: true }] });
+      if (r === "ext") { api.openPath(path).catch((e) => status(e.message, "err")); return null; }
+      if (r !== "text") return null;
+    }
     const t = newTab({ path, text, kind: k, mtime, encoding, eol });
-    if (k === "text" && text.includes("\u0000")) toast(`${basename(path)} looks like a binary file. It is shown as text; saving it from Callio may damage it.`, "err", 7000);
+    t.pinned = wasPinned(path);
+    if (k === "text" && text.includes("\u0000")) toast(`${basename(path)} is shown as text; saving it from Callio may damage it.`, "warn", 7000);
     else if (!/^utf/.test(encoding)) toast(`${basename(path)} isn't Unicode; it was opened as ${encodingName(encoding)} and will be saved the same way. If letters look wrong, pick its encoding in the status bar.`, "", 7000);
     addRecent(path);
     await activate(t.id);
     if (line) gotoLine(line);
     return t;
   } catch (e) {
-    toast(`Couldn't open ${basename(path)}: ${e.message}`, "err");
+    busy.done();
+    status(`Couldn't open ${basename(path)}: ${e.message}`, "err");
     return null;
   }
+}
+
+// ---------------- archives and programs ----------------
+async function openArchive(path) {
+  const name = basename(path);
+  const info = await call("path_info", { path }).catch(() => null);
+  const size = info?.size ? ` (${info.size > 1048576 ? (info.size / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(info.size / 1024)) + " KB"})` : "";
+  const go = await ask({ title: "Extract this archive?", text: `${name}${size} is a compressed archive. Extract it into a folder next to it?`, buttons: [{ label: "No", value: null }, { label: "Yes, extract…", value: "yes", primary: true }] });
+  if (!go) return;
+  let list = [];
+  try { list = await call("list_extractors"); } catch {}
+  if (!list.length) return status("No extractor was found on this PC", "err");
+  let last = null;
+  try { last = localStorage.getItem("callio.extractor"); } catch {}
+  list.sort((a, b) => (b.id === last) - (a.id === last));
+  const pick = list.length === 1 ? list[0].id : await ask({ title: `Extract ${name} with…`, text: "Extractors installed on this PC:", vertical: true, buttons: [...list.map((x) => ({ label: x.name + (x.id === last ? "  — last used" : ""), value: x.id })), { label: "Cancel", value: null }] });
+  if (!pick) return;
+  try { localStorage.setItem("callio.extractor", pick); } catch {}
+  const ex = list.find((x) => x.id === pick);
+  const busy = loading(`Extracting ${name}…`, { delay: 0, detail: ex.name });
+  try {
+    const r = await call("extract_with", { archive: path, extractor: pick });
+    if (r.finished) status(`Extracted ${name} into ${basename(r.dest)}`, "ok");
+    else status(r.dest ? `${ex.name} is extracting ${name} into ${basename(r.dest)}` : `Opened ${name} in ${ex.name}`, "ok");
+    if (folder && r.dest) { expanded.add(dirname(r.dest)); setTimeout(async () => { await refreshTree(); revealInTree(r.dest, true); }, r.finished ? 0 : 900); }
+  } catch (e) { status(`Couldn't extract ${name}: ${e.message || e}`, "err"); }
+  finally { busy.done(); }
+}
+async function confirmLaunch(path) {
+  const name = basename(path);
+  const ext = name.split(".").pop().toLowerCase();
+  const kind = ext === "msi" || ext === "msix" || ext === "appx" ? "an installer" : ["bat", "cmd", "ps1", "vbs", "wsf", "js_"].includes(ext) ? "a script" : ext === "lnk" || ext === "url" ? "a shortcut" : "a program";
+  const r = await ask({ title: `Run ${name}?`, text: `${name} is ${kind}. It will run outside Callio and can change your computer — only run it if you trust where it came from.`, buttons: [{ label: "Cancel", value: null }, { label: "Show in folder", value: "reveal" }, { label: "Run", value: "run", primary: true }] });
+  if (r === "reveal") return api.revealPath(path);
+  if (r !== "run") return;
+  try { await call("launch_program", { path }); status(`Started ${name}`, "ok"); }
+  catch (e) { status(`Couldn't start ${name}: ${e.message || e}`, "err"); }
 }
 
 async function closeTab(id) {
@@ -428,7 +635,8 @@ async function closeTab(id) {
   if (t.kind === "doc" || t.kind === "sheet") import("./office.js").then((m) => m.closeDoc(t));
   if (t.kind === "doc") import("./word.js").then((m) => m.closeWord(t));
   if (t.kind === "deck") import("./deck.js").then((m) => m.closeDeck(t));
-  if (t.kind === "image") import("./image.js").then((m) => m.closeImage(t));
+  if (t.kind === "image") { import("./image.js").then((m) => m.closeImage(t)); import("./viewer.js").then((m) => m.forgetPreview(t)); }
+  if (t.kind === "media") import("./media.js").then((m) => m.closeMedia(t));
   await tabOut($(`#tabs .tab[data-id="${id}"]`));
   const i = tabs.indexOf(t);
   if (i < 0) return;
@@ -541,8 +749,8 @@ function renderRecent() {
   for (const p of getRecent().slice(0, 8)) {
     const el = document.createElement("div");
     el.className = "rc";
-    el.innerHTML = `<span></span><small></small>`;
-    el.firstChild.textContent = basename(p);
+    el.innerHTML = `${fileBadge(p)}<span class="rc-name"></span><small></small>`;
+    el.querySelector(".rc-name").textContent = basename(p);
     el.lastChild.textContent = dirname(p);
     el.onclick = () => openPath(p);
     box.appendChild(el);
@@ -558,33 +766,68 @@ export function setFolder(f) {
   $("#folder-name").textContent = f ? basename(f) : "No folder";
   $("#folder-name").title = f || "";
   refreshTree();
+  watchFolder(f);
   refreshProjectIndex();
   updateLink(f);
   window.dispatchEvent(new CustomEvent("callio-folder", { detail: f }));
 }
+let treeBusy = null, treeAgain = false;
+/** Re-list the open folders and redraw the tree (selection, scroll and focus are kept). */
 export async function refreshTree() {
+  // one redraw at a time; changes arriving meanwhile cause one more pass
+  if (treeBusy) { treeAgain = true; return treeBusy; }
+  treeBusy = (async () => {
+    do { treeAgain = false; await drawTree(); } while (treeAgain);
+  })();
+  try { await treeBusy; } finally { treeBusy = null; }
+}
+async function drawTree() {
   const tree = $("#tree");
   initTreeOps();
   if (!folder) { tree.innerHTML = `<div class="empty-note">Open a folder to see its files.</div>`; return; }
+  const selected = new Set([...$$(".tree-item.sel")].map((x) => norm(x.dataset.path)));
+  const focused = document.activeElement?.closest?.(".tree-item")?.dataset.path;
   const frag = document.createDocumentFragment();
-  await renderDir(folder, 0, frag);
+  // the folder itself, on top: everything else hangs from it
+  const root = document.createElement("div");
+  root.className = "tree-item tree-root";
+  root.dataset.path = folder;
+  root.style.setProperty("--d", 0);
+  root.style.paddingLeft = "8px";
+  root.innerHTML = `<span class="twisty open">${ic("chevron-right")}</span>${fileBadge(folder, true)}<span class="nm"></span>`;
+  root.querySelector(".nm").textContent = basename(folder) || folder;
+  root.title = folder;
+  root._it = { path: folder, name: basename(folder), isDir: true, root: true };
+  root.tabIndex = -1;
+  root.onclick = () => { for (const x of $$(".tree-item.sel")) x.classList.remove("sel"); root.classList.add("sel"); };
+  root.oncontextmenu = (e) => { e.preventDefault(); e.stopPropagation(); treeMenu(e, null, root); };
+  frag.appendChild(root);
+  await renderDir(folder, 1, frag);
+  const top = tree.scrollTop;
   tree.innerHTML = "";
   tree.appendChild(frag);
-  highlightTree();
+  tree.scrollTop = top;
+  for (const el of $$(".tree-item", tree)) {
+    if (selected.has(norm(el.dataset.path))) el.classList.add("sel");
+    if (focused && el.dataset.path === focused) el.focus({ preventScroll: true });
+  }
+  highlightTree(false);
 }
 async function renderDir(dir, depth, into) {
   let items;
   try { items = await api.listDir(dir); } catch (e) { return; }
+  items = items.filter((it) => !isHiddenName(it.name, it.isDir));
   items.sort((a, b) => (b.isDir - a.isDir) || a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
-  for (const it of items) {
+  // children of an open folder are listed in parallel, then put in order
+  const subs = await Promise.all(items.map((it) => (it.isDir && expanded.has(it.path) ? (async () => { const f = document.createDocumentFragment(); await renderDir(it.path, depth + 1, f); return f; })() : null)));
+  items.forEach((it, idx) => {
     const el = document.createElement("div");
-    const k = kindOf(it.name);
-    const ext = it.name.split(".").pop().toLowerCase();
-    el.className = "tree-item" + (!it.isDir && k === "text" && !/\.(txt)$/i.test(it.name) ? " muted" : "");
+    el.className = "tree-item" + (it.isDir ? " dir" : "");
     el.style.paddingLeft = 8 + depth * 14 + "px";
+    el.style.setProperty("--d", depth);
     el.dataset.path = it.path;
     const open = expanded.has(it.path);
-    el.innerHTML = `<span class="twisty${open ? " open" : ""}">${it.isDir ? ic("chevron-right") : ""}</span><span class="fi ${k}">${it.isDir ? "" : k === "tex" ? "TeX" : k === "md" ? "MD" : k === "bib" ? "BIB" : ext === "pdf" ? "PDF" : ext === "ipynb" ? "NB" : k === "doc" ? "DOC" : k === "sheet" ? "XLS" : k === "deck" ? "PPT" : k === "image" ? "IMG" : ""}</span><span class="nm"></span>`;
+    el.innerHTML = `<span class="twisty${open ? " open" : ""}">${it.isDir ? ic("chevron-right") : ""}</span>${fileBadge(it.name, it.isDir)}<span class="nm"></span>`;
     el.querySelector(".nm").textContent = it.name;
     el.title = it.path;
     el._it = it;
@@ -598,7 +841,7 @@ async function renderDir(dir, depth, into) {
       el.classList.add("sel");
       if (it.isDir) {
         const under = () => [...$$(".tree-item")].filter((x) => norm(x.dataset.path).startsWith(norm(it.path) + "/"));
-        if (open) { expanded.delete(it.path); if (!reduced()) await Promise.all(under().slice(0, 40).map((x) => x.animate([{ opacity: 1 }, { opacity: 0, transform: "translateX(-6px)" }], { duration: 100, easing: "ease-in", fill: "forwards" }).finished.catch(() => {}))); await refreshTree(); }
+        if (expanded.has(it.path)) { expanded.delete(it.path); if (!reduced()) await Promise.all(under().slice(0, 40).map((x) => x.animate([{ opacity: 1 }, { opacity: 0, transform: "translateX(-6px)" }], { duration: 100, easing: "ease-in", fill: "forwards" }).finished.catch(() => {}))); await refreshTree(); }
         else { expanded.add(it.path); await refreshTree(); cascade(under()); }
       }
       else openPath(it.path);
@@ -608,8 +851,21 @@ async function renderDir(dir, depth, into) {
     // drag to move (Ctrl: copy). Pointer events: WebView2 gives HTML drag and drop to Tauri.
     el.onpointerdown = (e) => { if (e.button === 0 && !el.querySelector("input")) treeDragStart(e, it, el); };
     into.appendChild(el);
-    if (it.isDir && open) await renderDir(it.path, depth + 1, into);
-  }
+    if (subs[idx]) into.appendChild(subs[idx]);
+  });
+}
+
+// the tree follows the disk: new, renamed, changed and deleted files show up at once
+let fsUnlisten = null;
+async function watchFolder(f) {
+  try { await call("fs_watch", { path: f || null }); } catch {}
+  if (fsUnlisten) return;
+  fsUnlisten = await listen("fs-changed", (dirs) => {
+    if (!folder || !Array.isArray(dirs)) return;
+    const shown = new Set([norm(folder), ...[...expanded].map(norm)]);
+    if (dirs.some((d) => shown.has(norm(d)))) refreshTree();
+    window.dispatchEvent(new CustomEvent("callio-fs-changed", { detail: dirs }));
+  }).catch(() => null);
 }
 // ---------------- file tree: right-click menu, clipboard, drag and drop, rename ----------------
 let treeClip = null; // { paths, cut }
@@ -635,6 +891,7 @@ function treeMenu(e, it, el) {
     B("newfile", "New File…"), B("newfolder", "New Folder…"),
     hr,
     it && !it.isDir && !many ? B("open", "Open") + B("openext", "Open with Default App") : "",
+    it && !it.isDir && !many && /\.pdf$/i.test(it.name) ? hr + B("toword", "Convert to Word to edit") + B("tomd", "Convert to Markdown to edit") + hr : "",
     B("reveal", "Reveal in File Explorer", "Shift+Alt+R"),
     B("terminal", "Open in Terminal"),
     hr,
@@ -672,6 +929,8 @@ async function treeAction(a, it, el) {
       case "newfile": case "newfolder": return await treeNew(dirOf(it), a === "newfolder");
       case "open": return openPath(it.path);
       case "openext": return await api.openPath(it.path);
+      case "toword": return (await import("./convertactions.js")).pdfToWord(it.path);
+      case "tomd": return (await import("./convertactions.js")).pdfToMarkdown(it.path);
       case "reveal": return await api.revealPath(target.path);
       case "terminal": return await call("open_terminal", { dir: dirOf(it) });
       case "find": return findInFolder(target.isDir ? target.path : dirname(target.path));
@@ -716,6 +975,7 @@ async function treeNew(dir, isFolder) {
     try {
       const p = await call("fs_create", { root: folder, dir, name, folder: isFolder });
       if (isFolder) expanded.add(p);
+      else await fillBlankOffice(p);
       await refreshTree();
       if (!isFolder) await openPath(p);
       revealInTree(p);
@@ -986,9 +1246,25 @@ function startRename(it, el) {
   input.onblur = () => finish(true);
   input.onclick = (e) => e.stopPropagation();
 }
-function highlightTree() {
+/** Mark the active tab's file in the tree; on a tab switch, open its folders and scroll to it. */
+function highlightTree(reveal = true) {
   const t = activeTab();
-  for (const el of $$(".tree-item")) el.classList.toggle("active", !!t?.path && norm(el.dataset.path) === norm(t.path));
+  let hit = null;
+  for (const el of $$(".tree-item")) {
+    const on = !!t?.path && norm(el.dataset.path) === norm(t.path);
+    el.classList.toggle("active", on);
+    if (on) hit = el;
+  }
+  if (!reveal || !t?.path || !folder) return;
+  if (hit) { hit.scrollIntoView({ block: "nearest", behavior: reduced() ? "auto" : "smooth" }); return; }
+  const f = norm(folder), p = norm(t.path);
+  if (!p.startsWith(f + "/")) return;
+  // open the folders down to the file, then show it
+  const parts = t.path.replace(/\\/g, "/").slice(folder.replace(/\\/g, "/").replace(/\/$/, "").length + 1).split("/");
+  let cur = folder.replace(/[\\/]+$/, "");
+  let added = false;
+  for (const part of parts.slice(0, -1)) { cur = cur + sep() + part; if (!expanded.has(cur)) { expanded.add(cur); added = true; } }
+  if (added) refreshTree().then(() => { const el = [...$$(".tree-item")].find((x) => norm(x.dataset.path) === p); el?.scrollIntoView({ block: "nearest" }); });
 }
 
 let indexTimer;
@@ -1060,6 +1336,16 @@ function onDocChanged(immediate = false) {
     mdEl.hidden = true; pdfWrap.hidden = true;
     clearTimeout(mdTimer);
     mdTimer = setTimeout(() => showNotebook(t), immediate ? 0 : 250);
+  } else if (t.kind === "mermaid") {
+    pdfWrap.hidden = true; mdEl.hidden = false;
+    clearTimeout(mdTimer);
+    const run = async () => {
+      const m = mdMod || (await loadMd());
+      if (activeTab() !== t) return;
+      const text = getView().state.doc.toString();
+      m.renderMarkdown(mdEl, "```mermaid\n" + text.replace(/```/g, "ˋˋˋ") + "\n```", t.path ? dirname(t.path) : "");
+    };
+    if (immediate) { mdEl.innerHTML = ""; run(); } else mdTimer = setTimeout(run, 250);
   } else if (t.kind === "md") {
     pdfWrap.hidden = true; mdEl.hidden = false;
     clearTimeout(mdTimer);
@@ -1939,6 +2225,31 @@ const TEMPLATES = {
   tex: "\\documentclass{article}\n\\usepackage{amsmath}\n\n\\title{Untitled}\n\\author{}\n\n\\begin{document}\n\\maketitle\n\n\n\n\\end{document}\n",
   bib: "",
 };
+/** Starting text of new files, by extension. */
+const NEW_TEXT = {
+  md: "", txt: "", bib: "", tex: TEMPLATES.tex,
+  csv: "Column A,Column B,Column C\n,,\n", tsv: "Column A\tColumn B\tColumn C\n\t\t\n",
+  json: "{\n  \n}\n", xml: '<?xml version="1.0" encoding="UTF-8"?>\n<root>\n  \n</root>\n', yaml: "# YAML\nkey: value\n",
+  mmd: "flowchart TD\n    A[Start] --> B{Is it working?}\n    B -- Yes --> C[Great]\n    B -- No --> D[Fix it]\n    D --> B\n",
+  ipynb: JSON.stringify({ cells: [{ cell_type: "markdown", metadata: {}, source: ["# Untitled notebook"] }, { cell_type: "code", execution_count: null, metadata: {}, outputs: [], source: [] }], metadata: { kernelspec: { name: "python3", display_name: "Python 3", language: "python" }, language_info: { name: "python" } }, nbformat: 4, nbformat_minor: 5 }, null, 1) + "\n",
+};
+const OFFICE_NEW = { docx: "Document", xlsx: "Workbook", pptx: "Presentation" };
+/** A new, empty .docx/.xlsx/.pptx/.odt/.ods made in the file list gets a valid blank document. */
+async function fillBlankOffice(p) {
+  if (!/\.(docx|dotx|odt|rtf|xlsx|xltx|ods|pptx)$/i.test(p)) return;
+  try { const { office } = await import("./office.js"); await office("office.blank", { out: p }); } catch (e) { toast(`${basename(p)} was created empty: ${e.message || e}`, "warn"); }
+}
+let untitledN = 0;
+/** A free name like "Document 2.docx" in `dir`. */
+async function freeName(dir, stem, ext) {
+  for (let i = 1; i < 500; i++) {
+    const name = `${stem}${i > 1 ? " " + i : ""}.${ext}`;
+    const p = joinPath(dir, name);
+    const info = await call("path_info", { path: p }).catch(() => null);
+    if (!info?.exists) return p;
+  }
+  return joinPath(dir, `${stem} ${Date.now()}.${ext}`);
+}
 /** A new, unsaved tab with this text (OCR results, conversions). */
 export async function openNewDoc(name, text, kind = "md") {
   const t = newTab({ text, kind });
@@ -1964,15 +2275,34 @@ async function newFile(kind) {
     }
     try {
       const p = await call("fs_create", { root: folder, dir: folder, name, folder: isFolder });
-      if (isFolder) expanded.add(p);
+      if (isFolder) expanded.add(p); else await fillBlankOffice(p);
       await refreshTree();
       if (!isFolder) await openPath(p);
       revealInTree(p, true);
     } catch (er) { toast(er.message || String(er), "err"); }
     return;
   }
-  const t = newTab({ text: TEMPLATES[kind] ?? "", kind });
+  // Word, Excel and PowerPoint: a real (blank) file is made first, then opened
+  if (OFFICE_NEW[kind]) {
+    let path = folder ? await freeName(folder, OFFICE_NEW[kind], kind) : await api.pickSaveFile(`${OFFICE_NEW[kind]}.${kind}`, null);
+    if (!path) return;
+    const busy = loading(`Creating ${basename(path)}…`);
+    try {
+      const { office } = await import("./office.js");
+      await office("office.blank", { out: path });
+      if (folder) await refreshTree();
+      await openPath(path);
+      if (folder) revealInTree(path, true);
+    } catch (e) { toast(`Couldn't create ${basename(path)}: ${e.message || e}`, "err"); }
+    finally { busy.done(); }
+    return;
+  }
+  const ext = kind === "yaml" ? "yaml" : kind;
+  const name = `Untitled-${++untitledN}.${ext}`;
+  const t = newTab({ text: NEW_TEXT[ext] ?? TEMPLATES[ext] ?? "", kind: kindOf(name), name });
+  t.saved = ""; t.dirty = false;
   await activate(t.id);
+  renderTabs();
   if (kind === "tex") gotoLine(11, 0, false);
 }
 function closeMenus() {
@@ -1995,6 +2325,7 @@ const MENU_ACTIONS = {
   "open-folder": () => cmdFolder(),
   save: () => cmdSave(false),
   "save-as": () => cmdSave(true),
+  "save-all": async () => { const n = tabs.filter((x) => x.dirty).length; await saveAll(); status(n ? `Saved ${n} file${n > 1 ? "s" : ""}` : "Everything is saved", "ok"); },
   "export-pdf": () => cmdExport(),
   "export-md": () => cmdExportMarkdown(),
   "convert-md": () => cmdExportMarkdown(true),
@@ -2079,8 +2410,16 @@ function initMenus() {
 async function cmdSave(saveAs) {
   const t = activeTab();
   if (!t) return;
-  if (t.kind === "pdf") { if (t.dirty || saveAs) await saveTab(t, saveAs); return; }
-  if ((await saveTab(t, saveAs)) && !saveAs && (t.kind === "tex" || t.kind === "bib") && settings.autoCompile !== "off") compile({ quiet: true });
+  if (t.kind === "pdf") {
+    if (!t.dirty && !saveAs) return status(`${t.name} has no changes to save`, "ok");
+    if (await saveTab(t, saveAs)) status(`Saved ${t.name}`, "ok");
+    return;
+  }
+  const busy = ["doc", "sheet", "deck", "image"].includes(t.kind) ? loading(`Saving ${t.name}…`) : null;
+  let ok = false;
+  try { ok = await saveTab(t, saveAs); } finally { busy?.done(); }
+  if (ok) status(`Saved ${t.name}`, "ok");
+  if (ok && !saveAs && (t.kind === "tex" || t.kind === "bib") && settings.autoCompile !== "off") compile({ quiet: true });
 }
 
 document.addEventListener("keydown", (e) => {
@@ -2093,6 +2432,7 @@ document.addEventListener("keydown", (e) => {
   if (!mod) { if (e.key === "F5") { e.preventDefault(); compile(); } return; }
   const k = e.key.toLowerCase();
   const run = (fn) => { e.preventDefault(); e.stopPropagation(); fn(); };
+  if (k === "s" && e.altKey) return run(() => MENU_ACTIONS["save-all"]());
   if (k === "s" && e.shiftKey) return run(() => cmdSave(true));
   if (k === "e" && e.shiftKey) return run(cmdExport);
   if (k === "m" && e.shiftKey) return run(() => cmdExportMarkdown());
@@ -2106,7 +2446,7 @@ document.addEventListener("keydown", (e) => {
   if (k === "enter") return run(() => compile());
   if (k === "\\") return run(() => updateSettings({ sidebar: !settings.sidebar }));
   if (k === ",") return run(openSettings);
-  if (k === "p" && !e.shiftKey && activeTab()?.kind === "md") return run(() => window.print());
+  if (k === "p" && !e.shiftKey && activeTab()) return run(() => printTab(activeTab()));
   if (k === "j" && e.altKey) return run(forwardSync);
   if (k === "l" && !e.shiftKey) return run(() => toggleAIPanel());
   if (k === "l" && e.shiftKey) return run(openLibraryWindow);
@@ -2495,6 +2835,7 @@ async function boot() {
   if (import.meta.env?.DEV) window.__wys = () => wys;
   initAI();
   initInline();
+  initWriting();
   initUndo();
   initHistory({
     activeTab,
@@ -2676,6 +3017,7 @@ async function boot() {
   });
 
   // show the (hidden) window as soon as the first frame is painted
+  performance.mark("callio-init-done");
   requestAnimationFrame(() => requestAnimationFrame(() => { if (IS_TAURI) call("show_window").catch(() => {}); }));
   const paths = await api.startupPaths().catch(() => []);
   for (const p of paths) await openPath(p);

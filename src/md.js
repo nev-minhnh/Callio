@@ -143,6 +143,8 @@ export function renderMarkdown(container, text, dir) {
     container.insertBefore(next[i], anchor);
   }
   if (paged) layoutPages(container);
+  // ```mermaid blocks: drawn as diagrams (the library loads on first use)
+  if (container.querySelector("pre > code.language-mermaid")) import("./mermaid.js").then((m) => m.drawMermaidBlocks(container)).catch((er) => console.warn(er));
 }
 
 // ---------------- page view when zoomed out ----------------

@@ -52,7 +52,7 @@ function editorState() {
     unsavedFiles: getTabs().filter((x) => x.dirty).map((x) => x.path || x.name),
     openFiles: getTabs().map((x) => x.path).filter(Boolean),
     compileErrors: errs.map((d) => ({ file: d.file, line: d.line, message: d.message })),
-    ...(office ? { note: { doc: "A Word document: read it with office_read and change it with word_edit (never write the file directly).", sheet: "A spreadsheet: read it with office_read and change it with sheet_edit (never write the file directly).", pdf: "A PDF: read it with read_pdf / office_read and change it with pdf_tool.", deck: "A presentation: read it with office_read and change it with deck_edit (never write the file directly).", image: "A picture: read its edits with office_read and change it with image_edit (LightCraft commands such as develop.set {values: {\"light.exposure\": 0.5}}, develop.auto, crop.aspect, mask.add…; never write the file directly)." }[t.kind] } : {}),
+    ...(office ? { note: { doc: "A Word document: read it with office_read and change it with word_edit (never write the file directly).", sheet: "A spreadsheet: read it with office_read and change it with sheet_edit (never write the file directly).", pdf: "A PDF: read it with read_pdf / office_read and change it with pdf_tool.", deck: "A presentation: read it with office_read and change it with deck_edit (never write the file directly).", image: "A picture: read its edits with office_read and change it with image_edit (picture commands such as develop.set {values: {\"light.exposure\": 0.5}}, develop.auto, crop.aspect, mask.add…; never write the file directly)." }[t.kind] } : {}),
   };
 }
 

@@ -1,4 +1,4 @@
-// Spreadsheets: a canvas grid over the GridCraft engine (callio-office). Only the cells on
+// Spreadsheets: a canvas grid over the spreadsheet engine (callio-office). Only the cells on
 // screen are fetched; formulas, recalculation, undo, formatting and saving happen in the engine,
 // so .xlsx files keep everything (styles, charts, pivots…) when saved back.
 import { office } from "./office.js";
@@ -562,9 +562,17 @@ async function commit(value, move = [1, 0]) {
   const s = S.sel, r = s.ar ?? s.r0, c = s.ac ?? s.c0;
   ed.hidden = true;
   S.editing = false;
-  await exec("cell.set", { cell: a1(r, c), input: value });
+  // show what was typed at once (formulas show once calculated) and move on; the engine's
+  // result replaces it a moment later
+  const key = `${r},${c}`, old = S.cells.get(key);
+  if (!String(value).startsWith("=")) {
+    const num = value !== "" && !isNaN(+String(value).replace(/,/g, ""));
+    S.cells.set(key, { ...(old || { r, c, st: {} }), r, c, text: value, x: { ...(old?.x || {}), num } });
+  }
   if (move) select(r + move[0], c + move[1]);
+  draw();
   $(".sh-scroll", host).focus({ preventScroll: true });
+  await exec("cell.set", { cell: a1(r, c), input: value });
 }
 function cancelEdit() {
   $(".sh-editor", host).hidden = true;

@@ -78,9 +78,10 @@ export function kindOf(path) {
   const base = (path || "").toLowerCase().split(/[\\/]/).pop();
   if (/^\.?(babelrc|eslintrc|prettierrc|jshintrc|swcrc)$/.test(base)) return "json";
   if (["pptx", "pptm", "ppsx", "ppsm", "potx", "potm", "odp"].includes(ext)) return "deck";
-  // pictures and camera raw files: LightCraft
+  // pictures and camera raw files: the photo editor
   if (IMAGE_EXT.includes(ext)) return "image";
   if (ext === "ipynb") return "ipynb";
+  if (ext === "mmd" || ext === "mermaid") return "mermaid";
   return "text";
 }
 
@@ -91,7 +92,7 @@ const STRUCT = Object.fromEntries([
   ["yaml", "yaml"], ["yml", "yaml"],
 ]);
 /** Kinds edited as text in the source editor. */
-export const TEXT_KINDS = new Set(["md", "tex", "bib", "text", "json", "xml", "yaml", "csv", "ipynb"]);
+export const TEXT_KINDS = new Set(["md", "tex", "bib", "text", "json", "xml", "yaml", "csv", "ipynb", "mermaid"]);
 
 // ---------- CSV / TSV: each column in its own colour ----------
 const colTags = Array.from({ length: 6 }, () => Tag.define());

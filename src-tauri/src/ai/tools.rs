@@ -41,7 +41,12 @@ pub fn definitions(ctx: &ToolContext) -> Vec<Value> {
         v.push(json!({"name": "fetch_url", "description": "Read a web page (or text file) and return its text content.",
             "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}}));
         if ctx.search_backend != "none" && !ctx.search_backend.is_empty() {
-            v.push(json!({"name": "web_search", "description": "Search the web. Returns titles, URLs and snippets.",
+            let desc = match ctx.search_backend.strip_prefix("engine:") {
+                Some(e) if crate::websearch::is_scholarly(e) => format!("Search scholarly literature with {} (the author's choice). Returns titles, links, authors/year/venue and abstracts. Use fetch_url to read a result.", crate::websearch::engine_name(e)),
+                Some(e) => format!("Search the web with {} (the author's choice). Returns the top results: titles, URLs and snippets. Use fetch_url to read a page.", crate::websearch::engine_name(if e == "auto" { "google" } else { e })),
+                None => "Search the web. Returns titles, URLs and snippets.".to_string(),
+            };
+            v.push(json!({"name": "web_search", "description": desc,
                 "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}));
         }
     }
@@ -375,6 +380,10 @@ pub async fn web_search(ctx: &ToolContext, q: &str) -> Result<String> {
             let base = ctx.search_url.trim_end_matches('/');
             let v: Value = c.get(format!("{base}/search?format=json&q={}", urlencoding::encode(q))).send().await?.error_for_status()?.json().await?;
             v["results"].as_array().into_iter().flatten().take(6).map(|r| json!({"title": r["title"], "url": r["url"], "snippet": r["content"]})).collect()
+        }
+        e if e.starts_with("engine:") => {
+            let id = &e["engine:".len()..];
+            return crate::websearch::search_for_ai(if id == "auto" { "google" } else { id }, q).await;
         }
         _ => bail!("web search isn't configured (Settings → AI → Web search)"),
     };

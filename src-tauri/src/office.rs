@@ -43,6 +43,21 @@ fn engine_path() -> Option<PathBuf> {
     cands.into_iter().find(|p| p.is_file())
 }
 
+/// Read the engine's file once in the background so the first Word / Excel / PowerPoint file
+/// opens quickly after the computer starts (the file is then in the system's cache). Nothing runs.
+pub fn prefetch() {
+    use std::io::Read;
+    let Some(p) = engine_path() else { return };
+    let Ok(mut f) = std::fs::File::open(p) else { return };
+    let mut buf = vec![0u8; 1 << 20];
+    while let Ok(n) = f.read(&mut buf) {
+        if n == 0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2)); // gently, not to slow the start
+    }
+}
+
 fn spawn() -> Result<Proc, String> {
     let exe = engine_path().ok_or("The office engine (callio-office.exe) is missing next to Callio.exe — reinstall Callio")?;
     let mut c = crate::util::command(&exe);

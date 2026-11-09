@@ -1,5 +1,5 @@
 // PowerPoint presentations (.pptx, .ppsx, .potx, .odp) edited like PowerPoint: slide thumbnails on
-// the left, the slide in the middle, notes below. DeckCraft (in the office engine) draws the
+// the left, the slide in the middle, notes below. The office engine draws the
 // slides and does the editing: clicks and drags are its pointer events, keys and typing go to its
 // key handling, ribbon buttons are its commands. Selection handles and the text caret are drawn here.
 import { api, call } from "./api.js";
@@ -29,7 +29,7 @@ export function deckHost() {
     <div class="dk-main">
       <div class="dk-slides" tabindex="0"></div>
       <div class="dk-center">
-        <div class="dk-stage"><div class="dk-slide"><img class="dk-img" alt="" draggable="false"><div class="dk-ov"></div></div></div>
+        <div class="dk-stage"><div class="dk-slide"><img class="dk-img" alt="" draggable="false"><div class="dk-ov"></div><div class="dk-ghost" hidden></div></div></div>
         <textarea class="dk-notes" placeholder="Click to add notes" spellcheck="true"></textarea>
       </div>
     </div>
@@ -53,8 +53,25 @@ async function run(cmd, params = {}) {
   apply(r.state);
   return r.result;
 }
+// typed letters show at once at the caret until the slide drawing with them arrives
+let ghost = null; // { x, y, h, text }
+function ghostShow() {
+  const g = $(".dk-ghost");
+  if (!g) return;
+  if (!ghost?.text) { g.hidden = true; host.classList.remove("ghosting"); return; }
+  const s = slideScale();
+  g.style.left = ghost.x * s + "px"; g.style.top = ghost.y * s + "px";
+  g.style.height = ghost.h * s + "px"; g.style.lineHeight = ghost.h * s + "px";
+  g.style.fontSize = ghost.h * s * 0.8 + "px";
+  g.textContent = ghost.text;
+  g.hidden = false;
+  host.classList.add("ghosting");
+}
+function ghostClear() { if (ghost) { ghost = null; ghostShow(); } }
 let pendingText = "", typing = null;
 function typeText(text) {
+  const c = D?.state?.caret;
+  if (c && !(D.state.textSel || []).length) { if (!ghost) ghost = { x: c[0], y: c[1], h: Math.max(4, c[3] - c[1]), text: "" }; ghost.text += text; ghostShow(); }
   pendingText += text;
   if (typing) return;
   typing = (async () => {
@@ -145,6 +162,7 @@ async function renderSlide() {
       img.dataset.slide = want.slide;
       if (changed) enter(img, "fade", { duration: 160 });
       D.rev = r.rev;
+      if (ghost && r.rev === D.state.rev && !pendingText && !typing) ghostClear();
       // the thumbnail of this slide follows
       const id = D.state.slides[want.slide]?.id;
       if (id != null) updateThumb(want.slide, id, r.rev);
@@ -272,6 +290,8 @@ async function onKey(e) {
   if (mod && e.key.toLowerCase() === "v") return; // the paste event brings the clipboard
   if (e.key.length === 1 && !mod && !e.altKey) return; // typed text comes through `input`
   e.preventDefault();
+  if (ghost && e.key === "Backspace" && ghost.text) { ghost.text = ghost.text.slice(0, -1); ghostShow(); }
+  else ghostClear();
   await typing;
   const r = await q("deck.key", { key: e.key.length === 1 ? e.key.toLowerCase() : e.key, ...mods(e) });
   if (r.error) status(r.error, "err");

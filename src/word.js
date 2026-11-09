@@ -1,6 +1,6 @@
 // Word documents (.docx, .doc, .odt, .rtf) edited in place, like Word: the office engine
-// (WordCraft) lays the document out and draws its pages; this module shows them, draws the caret
-// and the selection, and turns every key, click and ribbon button into a WordCraft command.
+// lays the document out and draws its pages; this module shows them, draws the caret
+// and the selection, and turns every key, click and ribbon button into an engine command.
 import { api, call } from "./api.js";
 import { toast, status, ask, basename, dirname, openPath } from "./main.js";
 import { office, exportDoc } from "./office.js";
@@ -56,6 +56,7 @@ export function wordHost() {
   host.innerHTML = `
     <div class="wd-rb"></div>
     <div class="wd-scroll" tabindex="-1"><div class="wd-pages"></div></div>
+    <div class="wd-ghost" hidden></div>
     <textarea class="wd-input" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" aria-label="Document text"></textarea>
     <div class="wd-status"><span class="wd-st-page"></span><span class="wd-st-words"></span><span class="tb-spacer"></span><span class="wd-st-msg"></span><button class="icon small wd-zo" title="Zoom out">${ic("minus")}</button><span class="wd-zoom">100%</span><button class="icon small wd-zi" title="Zoom in">${ic("plus")}</button><button class="small wd-fit" title="Page width">⟷</button></div>`;
   wire();
@@ -78,10 +79,46 @@ async function run(cmd, params = {}) {
   return r.result;
 }
 
+// typing: letters show at once (a "ghost" in the paragraph's font at the caret) while the engine
+// lays them out; the page drawing that includes them replaces the ghost
+let ghost = null; // { page, x, y, h, text }
+function ghostShow() {
+  const g = $(".wd-ghost");
+  if (!ghost || !ghost.text) { g.hidden = true; host.classList.remove("ghosting"); return; }
+  const p = W?.pages[ghost.page];
+  if (!p) return;
+  const z = W.zoom * PX;
+  const f = fmt();
+  const pr = p.el.getBoundingClientRect(), hr = host.getBoundingClientRect();
+  const size = (f.size || ghost.h / 1.22) * z;
+  g.style.left = pr.left - hr.left + ghost.x * z + "px";
+  g.style.top = pr.top - hr.top + ghost.y * z + "px";
+  g.style.height = ghost.h * z + "px";
+  g.style.lineHeight = ghost.h * z + "px";
+  g.style.fontSize = size + "px";
+  g.style.fontFamily = `"${f.fontShownAs || f.font || "Calibri"}", "${f.font || "Calibri"}", Carlito, Calibri, "Segoe UI", sans-serif`;
+  g.style.fontWeight = f.bold ? "700" : "400";
+  g.style.fontStyle = f.italic ? "italic" : "normal";
+  g.style.textDecoration = f.underline ? "underline" : "none";
+  g.style.color = /^[0-9a-f]{6}$/i.test(f.color || "") ? "#" + f.color : "#111";
+  g.textContent = ghost.text;
+  g.hidden = false;
+  host.classList.add("ghosting");
+}
+function ghostAdd(text) {
+  const c = W?.state?.caret;
+  if (!c) return;
+  if (!ghost) ghost = { page: c.page, x: c.x, y: c.y, h: c.h, text: "" };
+  ghost.text += text;
+  ghostShow();
+}
+function ghostClear() { if (!ghost) return; ghost = null; ghostShow(); }
+
 // typing: letters typed while the engine is busy go in one call
 let pendingText = "";
 let typing = null;
 function typeText(text) {
+  ghostAdd(text);
   pendingText += text;
   if (typing) return;
   typing = (async () => {
@@ -301,6 +338,7 @@ async function renderVisible() {
       p.rev = r.rev === rev ? rev : r.rev;
       p.scale = scale;
       if (r.rev !== W.state.rev) p.rev = -1; // edited while drawing: draw again
+      else if (ghost && i === ghost.page && !pendingText && !typing) ghostClear();
     }
   } catch (e) { console.warn("word render", e); }
   finally { rendering = false; }
@@ -391,6 +429,8 @@ async function onKey(e) {
   if (name === "Mod+H" || name === "Mod+F") { e.preventDefault(); return findReplace(); }
   if (name === "Alt+Q") { e.preventDefault(); tell?.focusSearch(); return; }
   e.preventDefault();
+  if (ghost && name === "Backspace" && ghost.text) { ghost.text = ghost.text.slice(0, -1); ghostShow(); }
+  else if (ghost) ghostClear();
   await typing;
   const r = await q("word.key", { key: name });
   if (r.error) status(r.error, "err");
@@ -517,7 +557,8 @@ function wire() {
   window.addEventListener("mouseup", () => { dragging = false; });
   // the selection is drawn inside the pages, so it scrolls with them; only the input follows
   let scRaf = 0;
-  sc.addEventListener("scroll", () => { if (!scRaf) scRaf = requestAnimationFrame(() => { scRaf = 0; placeInput(); }); }, { passive: true });
+  sc.addEventListener("scroll", () => { if (!scRaf) scRaf = requestAnimationFrame(() => { scRaf = 0; placeInput(); if (ghost) ghostShow(); }); }, { passive: true });
+  sc.addEventListener("mousedown", () => ghostClear(), true);
   sc.addEventListener("wheel", (e) => { if (e.ctrlKey && W) { e.preventDefault(); setZoom(W.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1)); } }, { passive: false });
   const inp = $(".wd-input");
   inp.addEventListener("keydown", onKey);

@@ -183,8 +183,8 @@ pub struct Recall {
 
 /// Recall what's relevant to `query` (zero model tokens), packed into `budget` characters.
 #[tauri::command]
-pub async fn mem_recall(app: AppHandle, project: String, query: String, session: String, budget: Option<usize>) -> CmdResult<Recall> {
-    tauri::async_runtime::spawn_blocking(move || recall(&app, &project, &query, &session, budget.unwrap_or(6000))).await.es()
+pub async fn mem_recall(app: AppHandle, project: String, query: String, session: String, budget: Option<usize>, before: Option<u64>) -> CmdResult<Recall> {
+    tauri::async_runtime::spawn_blocking(move || recall(&app, &project, &query, &session, budget.unwrap_or(6000), before)).await.es()
 }
 
 fn day(t: u64) -> String {
@@ -219,15 +219,18 @@ fn clip(s: &str, n: usize) -> String {
     out
 }
 
-pub fn recall(app: &AppHandle, project: &str, query: &str, session: &str, budget: usize) -> Recall {
+pub fn recall(app: &AppHandle, project: &str, query: &str, session: &str, budget: usize, before: Option<u64>) -> Recall {
     let d = dir(app, project);
     let meta: Meta = read_json(d.join("meta.json"));
     let pins: Vec<Pin> = read_json(d.join("pins.json"));
     let traces = read_traces(&d);
-    recall_core(&traces, &pins, meta, query, session, budget)
+    recall_core(&traces, &pins, meta, query, session, budget, before)
 }
 
-pub fn recall_core(traces: &[Trace], pins: &[Pin], meta: Meta, query: &str, session: &str, budget: usize) -> Recall {
+/// `before`: turns of the current conversation older than this (unix ms) have left the model's
+/// window, so they can be recalled too.
+pub fn recall_core(traces: &[Trace], pins: &[Pin], meta: Meta, query: &str, session: &str, budget: usize, before: Option<u64>) -> Recall {
+    let recallable = |t: &Trace| t.session != session || before.is_some_and(|b| t.t < b);
     let mut skill_count: HashMap<String, usize> = HashMap::new();
     for t in traces {
         for s in &t.skills {
@@ -239,7 +242,7 @@ pub fn recall_core(traces: &[Trace], pins: &[Pin], meta: Meta, query: &str, sess
     let skills: Vec<String> = skills.into_iter().map(|(s, _)| s).take(8).collect();
 
     // only earlier sessions are recalled (the current conversation is already in context)
-    let past: Vec<usize> = (0..traces.len()).filter(|&i| traces[i].session != session).collect();
+    let past: Vec<usize> = (0..traces.len()).filter(|&i| recallable(&traces[i])).collect();
     let mut out = String::new();
     if !pins.is_empty() {
         out.push_str("Things the author asked you to remember:\n");
@@ -333,7 +336,7 @@ pub fn recall_core(traces: &[Trace], pins: &[Pin], meta: Meta, query: &str, sess
             let i = past[k];
             for j in [i.wrapping_sub(1), i, i + 1] {
                 if let Some(t) = traces.get(j) {
-                    if t.session == traces[i].session && t.session != session && !chosen.contains(&j) {
+                    if t.session == traces[i].session && recallable(t) && !chosen.contains(&j) {
                         chosen.push(j);
                     }
                 }
@@ -486,15 +489,15 @@ mod tests {
             mk(3 * dms + 1, "c", "assistant", "Cut it to 180 words, keeping the AFP collaboration sentence."),
         ];
         let pins = vec![Pin { id: "p".into(), t: 0, text: "British spelling throughout".into() }];
-        let r = recall_core(&tr, &pins, Meta::default(), "what did we decide about GLiNER?", "now", 4000);
+        let r = recall_core(&tr, &pins, Meta::default(), "what did we decide about GLiNER?", "now", 4000, None);
         assert!(r.text.contains("British spelling"), "{}", r.text);
         assert!(r.text.contains("span-based NER"), "{}", r.text);
         assert!(!r.text.contains("booktabs"), "{}", r.text);
         // "where were we" → the latest session comes back
-        let r2 = recall_core(&tr, &[], Meta::default(), "where were we?", "now", 4000);
+        let r2 = recall_core(&tr, &[], Meta::default(), "where were we?", "now", 4000, None);
         assert!(r2.text.contains("180 words"), "{}", r2.text);
         // the current session is never recalled
-        let r3 = recall_core(&tr, &[], Meta::default(), "abstract shorter", "c", 4000);
+        let r3 = recall_core(&tr, &[], Meta::default(), "abstract shorter", "c", 4000, None);
         assert!(!r3.text.contains("180 words"), "{}", r3.text);
         assert_eq!(day(1_793_404_800_000), "2026-10-31");
         assert_eq!(day(951_782_400_000), "2000-02-29");

@@ -1,8 +1,8 @@
 // Undo / Redo for every kind of tab, in the top toolbar: ↶ ▾ ↷ ▾. The ▾ lists the last 100
 // steps (AI edits marked) and undoes or redoes several at once. Each kind of tab gives a provider:
 //   list(t) → { undo: [label…], redo: [label…] } newest first;  step(t, n, redo) → undo/redo n steps.
-// Text tabs use CodeMirror's history (with named steps), spreadsheets GridCraft's, Word
-// documents WordCraft's, PDFs their own page/annotation history.
+// Text tabs use CodeMirror's history (with named steps), spreadsheets and Word
+// documents the engine's, PDFs their own page/annotation history.
 import { activeTab } from "./main.js";
 import { undoList, undoSteps, getView } from "./editor.js";
 

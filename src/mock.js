@@ -173,12 +173,17 @@ export async function invoke(cmd, a, opts) {
       const isEdit = r.id.startsWith("edit");
       const isInline = r.id.startsWith("inline");
       let text;
-      if (r.id.startsWith("write")) {
-        const src = r.messages[0].content; const out = [];
-        if (/teh/.test(src)) out.push({ quote: "teh", fix: ["the"], kind: "spelling", why: "Misspelled word." });
-        if (/is very important/.test(src)) out.push({ quote: "is very important", fix: ["matters", "is essential"], kind: "style", why: "Wordy; a stronger verb reads better." });
-        if (/they was/.test(src)) out.push({ quote: "they was", fix: ["they were"], kind: "grammar", why: "Subject–verb agreement." });
-        text = JSON.stringify(out);
+      if (r.id.startsWith("write") && /Review each numbered unit/.test(r.system || "")) {
+        const src = r.messages[0].content; const issues = [];
+        src.split(/\n\n(?=\[\d+\] )/).forEach((part) => {
+          const m = /^\[(\d+)\] ([\s\S]*)$/.exec(part.trim()); if (!m) return;
+          const unit = +m[1], t = m[2];
+          if (/teh/.test(t)) issues.push({ unit, category: "correctness", type: "spelling", title: "Correct the spelling", original: "teh", replacement: "the", explanation: "Misspelled word." });
+          if (/is very important/.test(t)) issues.push({ unit, category: "clarity", type: "wordiness", title: "Make it concise", original: "is very important", replacement: "matters", explanation: "A stronger verb reads better." });
+          if (/they was/.test(t)) issues.push({ unit, category: "correctness", type: "grammar", title: "Fix the agreement", original: "they was", replacement: "they were", explanation: "Subject–verb agreement." });
+          if (/happy/.test(t)) issues.push({ unit, category: "engagement", type: "word choice", title: "Choose a livelier word", original: "happy", replacement: "delighted", explanation: "A more vivid word." });
+        });
+        text = JSON.stringify({ issues, tone: "Neutral, informative", tone_fits: true });
       } else if (r.id.startsWith("translate")) text = "Bản dịch: " + r.messages[0].content;
       else if (isInline) text = " and the results are consistent across seeds.";
       else if (isEdit) text = "Hello, world! As shown in Section~\\ref{sec:intro}, we cite \\cite{knuth}.";
@@ -260,6 +265,7 @@ export async function invoke(cmd, a, opts) {
     case "fs_find": { const hits = []; for (const [p, t] of files) if (p.startsWith(a.dir + "/")) String(t).split("\n").forEach((l, i) => { if (l.toLowerCase().includes(a.query.toLowerCase())) hits.push({ path: p, line: i + 1, col: 0, text: l.trim() }); }); return hits; }
     case "open_terminal": return null;
     case "translate_google": await sleep(300); return { text: `[${a.to}] ${a.text}`, from: "en" };
+    case "define_english": return `${a.word}  /test/\n\nnoun\n1. A sample meaning.`;
     case "web_search_engine": return [{ title: `Result for ${a.query}`, url: "https://example.org/", snippet: "A sample result.", meta: "" }];
     case "list_extractors": return [{ id: "7zip", name: "7-Zip", exe: "7zG.exe", direct: true }, { id: "tar", name: "Windows (built in)", exe: "tar.exe", direct: true }, { id: "explorer", name: "File Explorer (open the archive)", exe: "explorer.exe", direct: false }];
     case "extract_with": return { dest: a.archive.replace(/\.[^.]+$/, ""), finished: true };

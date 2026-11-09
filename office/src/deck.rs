@@ -197,3 +197,120 @@ pub fn commands(d: &Deck) -> Json {
 pub fn text(d: &mut Deck) -> Json {
     run(d, "document.inspect", &json!({})).unwrap_or(Json::Null)
 }
+
+// ---------------- the writing assistant ----------------
+
+/// The text of shape `id`, paragraph by paragraph.
+fn paragraphs(d: &mut Deck, id: u64) -> Option<Vec<String>> {
+    let v = run(d, "text.get", &json!({ "id": id })).ok()?;
+    Some(v["paragraphs"].as_array()?.iter().map(|p| p["text"].as_str().unwrap_or("").to_string()).collect())
+}
+
+/// Edit shape `id`'s text (if it isn't being edited already).
+fn edit_shape(d: &mut Deck, id: u64) -> Result<(), String> {
+    let editing = d.session.active().and_then(|st| st.selection.text.as_ref()).is_some_and(|t| u64::from(t.shape.0) == id);
+    if editing {
+        return Ok(());
+    }
+    let _ = run(d, "selection.set", &json!({ "ids": [id] }));
+    run(d, "text.edit", &json!({ "id": id })).map(|_| ())
+}
+
+/// The text boxes of the slide shown.
+pub fn ai_units(d: &mut Deck) -> Json {
+    let Some(st) = d.session.active() else { return json!({ "rev": 0, "units": [] }) };
+    let units: Vec<Json> = st
+        .shapes()
+        .iter()
+        .filter_map(|sh| {
+            let text = sh.text.as_ref()?.text();
+            (text.trim().chars().count() >= 3).then(|| json!({ "key": { "shape": sh.id.0 }, "text": text }))
+        })
+        .collect();
+    json!({ "rev": format!("{}:{}", st.revision, st.selection.slide), "units": units })
+}
+
+fn select_in(d: &mut Deck, shape: u64, p0: usize, p1: usize, original: &str) -> Result<(), String> {
+    edit_shape(d, shape)?;
+    let paras = paragraphs(d, shape).ok_or("The text box has gone")?;
+    for (p, line) in paras.iter().enumerate().skip(p0).take(p1.saturating_sub(p0) + 1) {
+        if let Some(byte) = line.find(original) {
+            let c0 = line[..byte].chars().count();
+            let c1 = c0 + original.chars().count();
+            return run(d, "text.select", &json!({ "anchor": [p, c0], "caret": [p, c1] })).map(|_| ());
+        }
+    }
+    Err("The text has changed since it was checked".into())
+}
+
+pub fn ai_apply(d: &mut Deck, shape: u64, original: &str, replacement: &str) -> Result<(), String> {
+    select_in(d, shape, 0, 10_000, original)?;
+    run(d, "text.insert", &json!({ "text": replacement })).map(|_| ())
+}
+
+pub fn ai_focus(d: &mut Deck, shape: u64, original: &str) {
+    let _ = select_in(d, shape, 0, 10_000, original);
+}
+
+/// The selected text, the paragraph at the caret, or the selected text box.
+pub fn ai_target(d: &mut Deck) -> Json {
+    let Some(st) = d.session.active() else { return Json::Null };
+    let (shape, sel) = match &st.selection.text {
+        Some(t) if !t.notes && t.cell.is_none() => (u64::from(t.shape.0), Some((t.anchor, t.caret))),
+        Some(_) => return Json::Null,
+        None if st.selection.shapes.len() == 1 => (u64::from(st.selection.shapes[0].0), None),
+        None => return Json::Null,
+    };
+    let Some(paras) = paragraphs(d, shape) else { return Json::Null };
+    let pick = |a: (usize, usize), c: (usize, usize)| -> Option<(String, usize, usize, bool)> {
+        if a != c {
+            let (s, e) = if a <= c { (a, c) } else { (c, a) };
+            let mut out = String::new();
+            for p in s.0..=e.0 {
+                let line: Vec<char> = paras.get(p)?.chars().collect();
+                let from = if p == s.0 { s.1.min(line.len()) } else { 0 };
+                let to = if p == e.0 { e.1.min(line.len()) } else { line.len() };
+                if p > s.0 {
+                    out.push('\n');
+                }
+                out.extend(line[from..to.max(from)].iter());
+            }
+            Some((out, s.0, e.0, true))
+        } else {
+            Some((paras.get(c.0)?.clone(), c.0, c.0, false))
+        }
+    };
+    let r = match sel {
+        Some((a, c)) => pick((a.0, a.1), (c.0, c.1)),
+        None => Some((paras.join("\n"), 0, paras.len().saturating_sub(1), false)),
+    };
+    match r {
+        Some((text, p0, p1, selection)) if !text.trim().is_empty() => json!({ "text": text, "selection": selection, "shape": shape, "p0": p0, "p1": p1 }),
+        _ => Json::Null,
+    }
+}
+
+pub fn ai_replace(d: &mut Deck, t: &Json, text: &str) -> Result<(), String> {
+    let shape = t["shape"].as_u64().ok_or("no text box")?;
+    let p0 = t["p0"].as_u64().unwrap_or(0) as usize;
+    let p1 = t["p1"].as_u64().unwrap_or(0) as usize;
+    if t["selection"].as_bool() == Some(true) {
+        if ai_target(d)["text"].as_str() == t["text"].as_str() {
+            return run(d, "text.insert", &json!({ "text": text })).map(|_| ());
+        }
+        return Err("The selection has changed".into());
+    }
+    edit_shape(d, shape)?;
+    let paras = paragraphs(d, shape).ok_or("The text box has gone")?;
+    let end = paras.get(p1).map_or(0, |l| l.chars().count());
+    run(d, "text.select", &json!({ "anchor": [p0, 0], "caret": [p1, end] }))?;
+    run(d, "text.insert", &json!({ "text": text })).map(|_| ())
+}
+
+pub fn ai_insert(d: &mut Deck, text: &str) -> Result<(), String> {
+    let editing = d.session.active().is_some_and(|st| st.selection.text.is_some());
+    if !editing {
+        return Err("Click into a text box first.".into());
+    }
+    run(d, "text.insert", &json!({ "text": text })).map(|_| ())
+}

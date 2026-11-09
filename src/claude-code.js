@@ -90,6 +90,7 @@ function toolTitle(name, input = {}) {
     case "Grep": return ["🔎", `Search “${input.pattern || ""}”`];
     case "Bash": case "PowerShell": return ["💻", `Run: ${input.description || input.command || ""}`];
     case "WebSearch": return ["🌐", `Web search “${input.query || ""}”`];
+    case "mcp__callio__web_search": return ["🌐", `Web search “${input.query || ""}”`];
     case "WebFetch": return ["🌐", `Read ${input.url || ""}`];
     case "Task": case "Agent": return ["🤖", `Sub-agent: ${input.description || ""}`];
     case "TodoWrite": return ["☑️", "Update to-do list"];
@@ -277,6 +278,7 @@ export async function runTurn(text, ui) {
       id, prompt: contextPreamble(ui.ctx) + text, sessionId: ui.session.id || null, model,
       cwd, permissionMode: settings.ccPermissionMode || "default", systemAppend: SYSTEM + skills + (ui.memory || ""), label,
       effort: /haiku/.test(model) ? null : (settings.aiEffort || null), thinking: settings.aiThinking !== false,
+      web: settings.aiWeb === false ? "off" : (settings.aiSearchEngine && settings.aiSearchEngine !== "auto" ? settings.aiSearchEngine : null),
     });
   } finally {
     runHandlers.delete(id);

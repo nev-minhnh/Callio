@@ -359,6 +359,7 @@ function apply(st, first = false) {
   if (W.t.dirty !== st.dirty) { W.t.dirty = st.dirty; window.dispatchEvent(new Event("callio-tab-dirty")); }
   window.dispatchEvent(new Event("callio-undo"));
   if (!first) keepCaretInView();
+  window.dispatchEvent(new CustomEvent("callio-doc-changed", { detail: { kind: "word" } }));
 }
 
 function drawOverlay() {
@@ -553,6 +554,8 @@ function wire() {
   // the document
   const sc = $(".wd-scroll");
   sc.addEventListener("mousedown", onDown);
+  sc.addEventListener("contextmenu", (e) => { e.preventDefault(); window.dispatchEvent(new CustomEvent("callio-ai-menu", { detail: { event: e, kind: "word" } })); });
+  sc.addEventListener("dblclick", (e) => window.dispatchEvent(new CustomEvent("callio-ai-dblclick", { detail: { event: e, kind: "word" } })));
   window.addEventListener("mousemove", onMove);
   window.addEventListener("mouseup", () => { dragging = false; });
   // the selection is drawn inside the pages, so it scrolls with them; only the input follows
@@ -630,4 +633,16 @@ export async function aiBatch(t, commands, label) {
   return r.results;
 }
 export const shownWord = () => W?.t || null;
+/** The writing assistant's access to the document (paragraphs, places on the pages, edits). */
+export async function wordAI(op, args = {}) {
+  if (!W) return null;
+  await typing;
+  const r = await q("word.ai", { op, ...args });
+  if (r && r.state) { apply(r.state); if (r.error) throw new Error(r.error); }
+  return r;
+}
+/** The pages on screen and the points → pixels factor. */
+export function wordView() {
+  return W ? { pages: W.pages.map((p) => p.el), z: W.zoom * PX, rev: W.state?.rev, scroller: $(".wd-scroll") } : null;
+}
 export function refreshShown() { if (W) office("word.state", { id: W.id }).then((s) => apply(s)); }

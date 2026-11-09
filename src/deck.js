@@ -119,6 +119,7 @@ function apply(st, first = false) {
   D.t.deckState = st;
   if (first || !old || old.slides.length !== st.slides.length || old.slides.some((s, i) => s.id !== st.slides[i]?.id || s.hidden !== st.slides[i]?.hidden) || old.sections?.length !== st.sections?.length) renderSlideList();
   else markCurrent();
+  queueMicrotask(() => window.dispatchEvent(new CustomEvent("callio-doc-changed", { detail: { kind: "deck" } })));
   if (first || st.rev !== D.rev || old?.slide !== st.slide) renderSlide();
   drawOverlay();
   const notes = $(".dk-notes");
@@ -471,7 +472,7 @@ function wire() {
   host.addEventListener("mousedown", onDown);
   window.addEventListener("mousemove", onMove);
   window.addEventListener("mouseup", onUp);
-  $(".dk-stage").addEventListener("contextmenu", (e) => e.preventDefault());
+  $(".dk-stage").addEventListener("contextmenu", (e) => { e.preventDefault(); setTimeout(() => window.dispatchEvent(new CustomEvent("callio-ai-menu", { detail: { event: e, kind: "deck" } })), 60); });
   $(".dk-stage").addEventListener("wheel", (e) => {
     if (!D) return;
     if (e.ctrlKey) { e.preventDefault(); D.zoom = slideScale() * (e.deltaY < 0 ? 1.1 : 1 / 1.1); layout(); }
@@ -555,4 +556,12 @@ export async function aiBatch(t, commands, label) {
   t.dirty = r.state.dirty;
   window.dispatchEvent(new Event("callio-tab-dirty"));
   return r.result;
+}
+
+/** The writing assistant's access to the presentation (text boxes, edits). */
+export async function deckAI(op, args = {}) {
+  if (!D) return null;
+  const r = await q("deck.ai", { op, ...args });
+  if (r && r.state) { apply(r.state); if (r.error) throw new Error(r.error); }
+  return r;
 }

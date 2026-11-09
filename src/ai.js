@@ -401,7 +401,8 @@ export function refreshModelSelect() {
   eff.hidden = !isClaudeModel(sel.value) || /haiku/.test(sel.value);
   eff.value = settings.aiEffort || "";
   $("#ai-web").classList.toggle("on", settings.aiWeb !== false);
-  $("#ai-web").hidden = cc;
+  $("#ai-web").hidden = false;
+  $("#ai-web").title = cc ? "Let Claude Code use the internet (search and read pages)" : $("#ai-web").title;
   refreshEngineChip();
   const mode = $("#ai-mode");
   mode.hidden = !cc;
@@ -431,7 +432,7 @@ function refreshEngineChip() {
   if (!b) return;
   const e = engineInfo(settings.aiSearchEngine || "auto");
   b.innerHTML = e ? `${engineDot(e)}<span class="eng-name">${e[1]}</span>${ic("chevron-down")}` : `<span class="eng-name">Auto</span>${ic("chevron-down")}`;
-  b.title = e ? `Web search with ${e[1]} — click to choose another search engine` : "Web search: automatic (Claude's own search, otherwise Google) — click to choose a search engine";
+  b.title = e ? `The AI searches the web with ${e[1]} — click to choose another search engine` : "Web search: automatic (Claude and Claude Code use their own search, other models Google) — click to choose a search engine";
   b.hidden = $("#ai-web").hidden || settings.aiWeb === false;
 }
 function engineMenu(ev) {
@@ -1215,6 +1216,7 @@ export function renderAISettings() {
     <label>Inline completion delay (ms) <input type="number" name="aiInlineDelay" min="200" max="5000" value="${settings.aiInlineDelay || 700}"></label>
     <h3 class="set-h">Internet</h3>
     <label class="check"><input type="checkbox" name="aiWeb" ${settings.aiWeb !== false ? "checked" : ""}> Let the AI use the internet (search papers, verify citations, read pages)</label>
+    <label class="check"><input type="checkbox" name="libAiDetails" ${settings.libAiDetails !== false ? "checked" : ""}> Library: when a PDF has no details, let the AI read its first pages and look it up on the internet (uses the Summary model)</label>
     <p class="note">Pick the search engine (Google, Cốc Cốc, Bing, DuckDuckGo, Google Scholar, Semantic Scholar, arXiv, PubMed…) from the chat's toolbar, next to the globe. Engines are read from their own results pages, like in your browser; no key is needed. The services below are used when the toolbar is set to Automatic.</p>
     <label>Automatic web search uses
       <select name="aiSearchBackend">

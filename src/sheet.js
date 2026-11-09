@@ -535,6 +535,7 @@ async function afterEdit() {
   showCell();
 }
 function markDirty(d) {
+  if (d && S?.t) { S.t.sheetRev = (S.t.sheetRev || 0) + 1; queueMicrotask(() => window.dispatchEvent(new CustomEvent("callio-doc-changed", { detail: { kind: "sheet" } }))); }
   const t = S.t;
   t.dirty = d;
   window.dispatchEvent(new CustomEvent("callio-tab-dirty", { detail: t }));
@@ -955,4 +956,39 @@ export async function exportSheet(t) {
     toast(`Saved ${basename(out)}`, "ok", 3000);
     if (fmt === "md" || fmt === "pdf") (await import("./main.js")).openPath(out);
   } catch (e) { toast(`Couldn't save: ${e.message}`, "err", 8000); }
+}
+
+/** The writing assistant's access to the sheet shown (text cells, edits). */
+export async function sheetAI(op, args = {}) {
+  if (!S) return null;
+  const id = S.t.sheetId, sheet = S.si;
+  if (op === "units") {
+    const r = await office("sheet.read", { id, sheet, range: null });
+    const units = [];
+    (r.rows || []).slice(0, 2000).forEach((row, ri) => (row || []).slice(0, 200).forEach((v, ci) => {
+      if (Array.isArray(v) || typeof v !== "string") return;
+      if (v.startsWith("=") || (v.split(/\s+/).length < 2 && v.length < 12)) return;
+      if (units.length < 400) units.push({ key: { cell: a1(ri, ci) }, text: v });
+    }));
+    return { rev: `${id}:${sheet}:${S.t.sheetRev || 0}`, units };
+  }
+  if (op === "target") {
+    const s = S.sel; if (!s) return null;
+    const cell = a1(s.ar ?? s.r0, s.ac ?? s.c0);
+    const v = await office("sheet.exec", { id, cmd: "cell.get", params: { sheet, cell } }).catch(() => null);
+    const text = v?.input ?? v?.text;
+    if (!text || typeof text !== "string" || text.startsWith("=") || !text.trim()) return null;
+    return { text, selection: false, cell };
+  }
+  const set = async (cell, input) => { await exec("cell.set", { cell, input }); window.dispatchEvent(new CustomEvent("callio-doc-changed", { detail: { kind: "sheet" } })); };
+  if (op === "apply") {
+    const v = await office("sheet.exec", { id, cmd: "cell.get", params: { sheet, cell: args.cell } });
+    const input = String(v?.input ?? v?.text ?? "");
+    if (!input.includes(args.original)) throw new Error("The cell has changed since it was checked");
+    return set(args.cell, input.replace(args.original, args.replacement));
+  }
+  if (op === "replace") return set(args.target.cell, args.text);
+  if (op === "focus") { const m = /^([A-Z]+)(\d+)$/.exec(args.cell || ""); if (m) await exec("selection.set", { range: args.cell }, { refresh: false }); return null; }
+  if (op === "insert") throw new Error("Pick a cell and use Replace instead.");
+  return null;
 }

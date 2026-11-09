@@ -217,6 +217,8 @@ fn base_tools() -> Value {
          "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "from_page": {"type": "integer"}, "to_page": {"type": "integer"}}, "required": ["path"]}},
         {"name": "view_pdf_page", "description": "See one page of a PDF as an image (figures, tables, equations, layout).",
          "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "page": {"type": "integer"}}, "required": ["path", "page"]}},
+        {"name": "web_search", "description": "Search the web with the search engine the author picked in Callio (Google, Cốc Cốc, Bing, DuckDuckGo, Google Scholar, Semantic Scholar, arXiv, PubMed…). Returns the top results: titles, links, snippets (and authors, year and venue for scholarly sources). Use WebFetch to read a result.",
+         "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
         {"name": "library_bibtex", "description": "BibTeX entries for papers in the author's Callio library, by citation key (comma-separated). Use these exact entries when adding references to a .bib file.",
          "inputSchema": {"type": "object", "properties": {"keys": {"type": "string"}}, "required": ["keys"]}}
     ])
@@ -256,6 +258,13 @@ async fn call_tool(app: &Asker, params: &Value) -> Value {
                 }
             };
             text_result(Value::String(decision.to_string()), false)
+        }
+        "web_search" => {
+            let engine = crate::websearch::cc_engine();
+            match crate::websearch::search_for_ai(&engine, args["query"].as_str().unwrap_or("")).await {
+                Ok(t) => text_result(Value::String(t), false),
+                Err(e) => text_result(Value::String(format!("{} search failed: {e}", crate::websearch::engine_name(&engine))), true),
+            }
         }
         "view_pdf_page" => match app("pdf_page_image".into(), args, Duration::from_secs(60)).await {
             Some(v) if v["data"].is_string() => json!({"content": [{"type": "image", "data": v["data"], "mimeType": "image/png"}, {"type": "text", "text": format!("Page {} of {}", v["page"], v["pages"])}]}),

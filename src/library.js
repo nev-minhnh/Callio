@@ -49,6 +49,11 @@ async function runQueue() {
         const title = (r.title && r.title.length > 10 && r.title.length < 300 ? r.title : null) || (r.info?.Title && r.info.Title.length > 12 ? r.info.Title : null) || head.split("\n").map((x) => x.trim()).find((x) => x.length > 15 && x.length < 250) || null;
         let found = false;
         try { found = await call("lib_enrich", { id, doi, title }); if (found) await loadLibrary(); } catch (e) { console.warn("details", e); }
+        // still nothing: the AI reads the first pages and looks the document up on the internet
+        if (!found && settings.libAiDetails !== false) {
+          try { found = await findDetails(id, r.pages, { fileName: fname, info: r.info, titleGuess: title }); } catch (e) { console.warn("AI details", e); }
+          if (found) await loadLibrary();
+        }
         // nothing online: at least the title from the first page
         // (only a title that was guessed from the file name is replaced, never one you typed)
         const cur = L.byId.get(id) || p;
@@ -63,6 +68,128 @@ async function runQueue() {
   status("");
   refreshAll();
 }
+// ---------------- details by AI + the web, for PDFs that have none ----------------
+const norm = (t) => String(t || "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+function titleSim(a, b) {
+  const A = new Set(norm(a).split(" ").filter((w) => w.length > 1)), B = new Set(norm(b).split(" ").filter((w) => w.length > 1));
+  if (!A.size || !B.size) return 0;
+  let n = 0; for (const w of A) if (B.has(w)) n++;
+  return (2 * n) / (A.size + B.size);
+}
+function jsonIn(s) {
+  s = String(s || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  const a = s.indexOf("{"), b = s.lastIndexOf("}");
+  if (a < 0 || b < a) return null;
+  try { return JSON.parse(s.slice(a, b + 1)); } catch { return null; }
+}
+const DETAILS_SHAPE = `{"title": "", "authors": ["Family, Given"], "year": 2024, "type": "article|inproceedings|incollection|book|phdthesis|mastersthesis|techreport|misc", "venue": "<journal, conference, school or institution>", "volume": "", "issue": "", "pages": "", "publisher": "", "doi": "", "arxiv": "", "url": "", "abstract": "", "query": "<a short web search query that would find this document>"}`;
+
+/**
+ * Find the bibliographic details of a library paper whose PDF had none: the AI reads its first
+ * pages, the scholarly indexes (Crossref, Semantic Scholar, OpenAlex) and the web are searched,
+ * and what is found fills the paper (a DOI found is checked against Crossref). Returns true when
+ * details were found.
+ */
+export async function findDetails(id, pages, { fileName = "", info = null, titleGuess = "" } = {}) {
+  const m = await import("./ai.js");
+  const model = settings.aiModel_library || m.modelFor("summary") || m.modelFor("edit");
+  if (!model) return false;
+  const p = L.byId.get(id);
+  const head = (pages || []).slice(0, 2).join("\n\n").slice(0, 7000);
+  if (head.trim().length < 40 && !titleGuess) return false;
+  status(`Finding the details of ${p?.title?.slice(0, 50) || fileName || "a paper"} with AI…`);
+  // 1. what the first pages say
+  const meta0 = jsonIn(await m.runAI("summary", {
+    model, maxTokens: 2000, temperature: 0, effort: "low", thinking: false,
+    system: `You read the first pages of a document (a paper, thesis, report, book chapter…) and extract its bibliographic details for a reference manager. Reply with JSON only, no prose:\n${DETAILS_SHAPE}\nUse only what the text shows; leave a field empty ("" or [] or null) when it isn't there. Authors as "Family, Given". Copy the abstract if there is one (at most 1500 characters). Never invent a DOI.`,
+    messages: [{ role: "user", content: `File name: ${fileName}\nPDF properties: ${JSON.stringify(info || {}).slice(0, 400)}\n\nFirst pages:\n<<<\n${head}\n>>>` }],
+  })) || {};
+  const title = String(meta0.title || titleGuess || "").trim();
+  if (!title) return false;
+  // 2. the scholarly indexes, by title
+  status(`Searching Crossref, Semantic Scholar and OpenAlex for “${title.slice(0, 60)}”…`);
+  const engines = ["crossref", "semantic", "openalex"];
+  const results = (await Promise.all(engines.map((e) => call("web_search_engine", { engine: e, query: title }).then((r) => r.map((h) => ({ ...h, engine: e }))).catch(() => [])))).flat();
+  const firstFamily = norm(String((meta0.authors || [])[0] || "").split(",")[0]);
+  const scored = results.map((h) => ({ h, s: titleSim(h.title, title) + (firstFamily && norm(h.meta).includes(firstFamily) ? 0.1 : 0) })).sort((a, b) => b.s - a.s);
+  const best = scored[0]?.s >= 0.85 ? scored[0].h : null;
+  let found = false;
+  const doiOf = (u) => (/doi\.org\/(10\.[^\s?#]+)/i.exec(u || "") || [])[1] || "";
+  if (best && doiOf(best.url)) {
+    try { found = await call("lib_enrich", { id, doi: decodeURIComponent(doiOf(best.url)), title }); } catch { /* next */ }
+  }
+  let meta = meta0;
+  if (!found && !best) {
+    // 3. the web (and a second look by the AI at what it found)
+    status(`Searching the web for “${title.slice(0, 60)}”…`);
+    const q = String(meta0.query || title).slice(0, 200);
+    const web = [...(await call("web_search_engine", { engine: "scholar", query: q }).catch(() => [])), ...(await call("web_search_engine", { engine: "google", query: q }).catch(() => []))].slice(0, 16);
+    if (web.length) {
+      const meta1 = jsonIn(await m.runAI("summary", {
+        model, maxTokens: 2000, temperature: 0, effort: "low", thinking: false,
+        system: `You complete a reference manager entry. You get the details read from a document's first pages and web search results about it. Reply with JSON only, no prose:\n${DETAILS_SHAPE}\nKeep what the document shows. Add details (venue, year, volume, pages, publisher, DOI, URL) only from a search result that is clearly this same document (same title and authors). Never invent anything; leave unknown fields empty.`,
+        messages: [{ role: "user", content: `From the document:\n${JSON.stringify(meta0)}\n\nWeb search results:\n${web.map((h, i) => `[${i + 1}] ${h.title}\n${h.url}\n${h.meta || ""}\n${h.snippet || ""}`).join("\n\n")}` }],
+      }));
+      if (meta1?.title) meta = meta1;
+      if (meta.doi && !found) { try { found = await call("lib_enrich", { id, doi: meta.doi, title }); } catch { /* keep the AI's */ } }
+    }
+  } else if (best && !found) {
+    // an index knows it without a DOI (e.g. Semantic Scholar): its authors, year and venue
+    const [au, yr, venue] = String(best.meta || "").split(" · ");
+    meta = { ...meta0, title: meta0.title || best.title, year: meta0.year || (/^\d{4}$/.test(yr || "") ? +yr : null), venue: meta0.venue || (venue && !/^cited by/.test(venue) ? venue : ""), url: meta0.url || best.url, abstract: meta0.abstract || best.snippet || "" };
+    if (!(meta0.authors || []).length && au && !/et al\.$/.test(au)) meta.authors = au.split(", ");
+  }
+  // 4. fill the paper (also after Crossref: the rest, and a real citation key)
+  const clean = {
+    title: String(meta.title || ""), authors: Array.isArray(meta.authors) ? meta.authors.map(String).filter(Boolean) : [],
+    year: Number.isFinite(+meta.year) && +meta.year > 1000 ? Math.round(+meta.year) : null,
+    type: /^(article|inproceedings|incollection|book|phdthesis|mastersthesis|techreport|misc)$/.test(meta.type || "") ? meta.type : "",
+    venue: String(meta.venue || ""), volume: String(meta.volume || ""), issue: String(meta.issue || ""), pages: String(meta.pages || ""),
+    publisher: String(meta.publisher || ""), doi: String(meta.doi || ""), arxiv: String(meta.arxiv || ""), url: String(meta.url || ""), abstract: String(meta.abstract || "").slice(0, 3000),
+  };
+  if (found) clean.doi = "";
+  const np = await call("lib_fill", { id, meta: clean }).catch(() => null);
+  const ok = found || !!(np && (np.authors?.length || np.year));
+  if (ok) toast(`Found the details of “${(np?.title || title).slice(0, 70)}”`, "ok", 2500);
+  return ok;
+}
+
+/** Find the details of every paper that has a PDF but no authors or year (the ⋯ menu). */
+export async function findMissingDetails(ids = null) {
+  await loadLibrary();
+  const list = (ids ? ids.map((i) => L.byId.get(i)) : L.papers).filter((p) => p && p.pdf && (!p.authors?.length || !p.year || !p.title || p.title === "Untitled paper" || p.titleGuess));
+  if (!list.length) { toast("Every paper with a PDF already has its details.", "ok", 2500); return; }
+  const { loading } = await import("./loading.js");
+  let stop = false;
+  const ld = loading(`Finding details for ${list.length} paper${list.length === 1 ? "" : "s"}…`, { delay: 0, cancel: () => { stop = true; } });
+  const pdf = await import("./pdf.js");
+  let n = 0, got = 0;
+  for (const p of list) {
+    if (stop) break;
+    ld.set(n / list.length, null, p.title?.slice(0, 70) || "");
+    try {
+      const path = await call("lib_pdf_path", { id: p.id });
+      if (path) {
+        const r = await pdf.extractText(new Uint8Array(await api.readBinary(path)), { maxPages: 3 }).catch(() => ({ pages: [] }));
+        const fname = (path.split(/[\\/]/).pop() || "").replace(/\.pdf$/i, "");
+        const head = r.pages?.[0] || "";
+        const mm = /(?:doi(?:\.org)?[:/\s]*|https?:\/\/doi\.org\/)(10\.\d{4,9}\/[^\s"<>]+)/i.exec(head);
+        const titleGuess = r.title || head.split("\n").map((x) => x.trim()).find((x) => x.length > 15 && x.length < 250) || "";
+        let found = false;
+        if (mm) found = await call("lib_enrich", { id: p.id, doi: mm[1].replace(/[.,;)\]]+$/, ""), title: titleGuess }).catch(() => false);
+        if (!found) found = await findDetails(p.id, r.pages, { fileName: fname, info: r.info, titleGuess });
+        if (found) got++;
+      }
+    } catch (e) { console.warn("details", p.id, e); }
+    n++;
+  }
+  ld.done();
+  await loadLibrary();
+  refreshAll();
+  status("");
+  toast(stop ? `Stopped — details found for ${got} of ${n}` : `Details found for ${got} of ${list.length} paper${list.length === 1 ? "" : "s"}`, got ? "ok" : "", 4000);
+}
+
 /** Index every paper whose PDF text isn't in the index yet (after an update, or added elsewhere). */
 export async function backfill() {
   await loadLibrary();
@@ -106,7 +233,7 @@ function wire() {
   addMenu.addEventListener("click", (e) => {
     const b = e.target.closest("[data-lib]"); if (!b) return;
     addMenu.hidden = true;
-    ({ pdf: addPdfs, id: addById, bib: importBib, ext: setupExtension })[b.dataset.lib]?.();
+    ({ pdf: addPdfs, id: addById, bib: importBib, ext: setupExtension, details: () => findMissingDetails() })[b.dataset.lib]?.();
   });
   // drag papers onto a collection
   dragOnto($("#lib-list"), {
@@ -401,6 +528,7 @@ function renderDetail(hit) {
       <button class="primary small" id="ld-open" ${p.pdf ? "" : "disabled"}>Open PDF${hit?.page ? ` (p. ${hit.page})` : ""}</button>
       <button class="small" id="ld-cite" title="Insert a citation at the cursor in the open draft and add the reference">Cite in draft</button>
       <button class="small" id="ld-bib">Copy BibTeX</button>
+      ${p.pdf ? `<button class="small" id="ld-ai" title="The AI reads the first pages and looks the paper up on the internet (Crossref, Semantic Scholar, OpenAlex, Google Scholar…), then fills the empty fields">${ic("sparkles")}<span>Find details with AI</span></button>` : ""}
       ${p.pdf ? "" : `<button class="small" id="ld-find">Find PDF online</button><button class="small" id="ld-attach">Attach PDF…</button>`}
       <button class="small icon" id="ld-del" title="Remove from library">${ic("trash")}</button>
     </div>
@@ -436,6 +564,7 @@ function renderDetail(hit) {
   for (const a of box.querySelectorAll("[data-draft]")) a.onclick = (e) => { e.preventDefault(); $("#dlg-library").close(); openPath(a.dataset.draft); };
   $("#ld-open").onclick = () => openPdf(p, hit?.page);
   $("#ld-cite").onclick = async () => { $("#dlg-library").close(); (await import("./cite.js")).citePaper(p); };
+  $("#ld-ai")?.addEventListener("click", async (e) => { const b = e.currentTarget; b.disabled = true; b.classList.add("is-busy"); try { await findMissingDetails([p.id]); } finally { b.disabled = false; b.classList.remove("is-busy"); } });
   $("#ld-bib").onclick = async () => { await navigator.clipboard.writeText(await call("lib_bibtex", { ids: [p.id] })); toast("BibTeX copied", "ok", 1500); };
   $("#ld-attach")?.addEventListener("click", async () => {
     const f = await api.pickOpenFile();

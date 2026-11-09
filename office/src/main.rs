@@ -306,6 +306,29 @@ fn handle(st: &Mutex<State>, cmd: &str, a: &Json) -> Result<Json, String> {
             let m = md::to_markdown(&w.session.doc, "doc");
             Ok(json!({ "markdown": m.markdown, "text": word::text(&mut w) }))
         }
+        "word.ai" => {
+            // the writing assistant: read paragraphs, find text on the pages, apply suggestions
+            let w = word_of(u(a, "id")?)?;
+            let mut w = w.lock().unwrap();
+            let op = s(a, "op").unwrap_or_default();
+            let text = |k: &str| a[k].as_str().unwrap_or_default().to_string();
+            let block = a["block"].as_u64().unwrap_or(0) as usize;
+            let r = match op.as_str() {
+                "units" => return Ok(word::ai_units(&mut w)),
+                "marks" => return Ok(word::ai_marks(&mut w, a["items"].as_array().map(|v| v.as_slice()).unwrap_or(&[]))),
+                "target" => return Ok(word::ai_target(&mut w)),
+                "apply" => word::ai_apply(&mut w, block, &text("original"), &text("replacement")),
+                "focus" => {
+                    word::ai_focus(&mut w, block, &text("original"));
+                    Ok(())
+                }
+                "replace" => word::ai_replace(&mut w, &a["start"], &a["end"], &text("expect"), &text("text")),
+                "insert" => word::ai_insert(&mut w, &text("text")),
+                o => Err(format!("unknown writing op {o}")),
+            };
+            let state = word::state(&mut w);
+            Ok(json!({ "error": r.err(), "state": state }))
+        }
         "word.commands" => Ok(word::commands()),
         "word.styles" => Ok(word::styles(&word_of(u(a, "id")?)?.lock().unwrap())),
         "word.close" => {
@@ -362,6 +385,27 @@ fn handle(st: &Mutex<State>, cmd: &str, a: &Json) -> Result<Json, String> {
             let out = s(a, "out").ok_or("missing `out`")?;
             deck::save(&mut d, &out, a["markSaved"].as_bool().unwrap_or(false))?;
             Ok(json!({ "out": out, "state": deck::state(&mut d) }))
+        }
+        "deck.ai" => {
+            let d = deck_of(u(a, "id")?)?;
+            let mut d = d.lock().unwrap();
+            let op = s(a, "op").unwrap_or_default();
+            let text = |k: &str| a[k].as_str().unwrap_or_default().to_string();
+            let shape = a["shape"].as_u64().unwrap_or(0);
+            let r = match op.as_str() {
+                "units" => return Ok(deck::ai_units(&mut d)),
+                "target" => return Ok(deck::ai_target(&mut d)),
+                "apply" => deck::ai_apply(&mut d, shape, &text("original"), &text("replacement")),
+                "focus" => {
+                    deck::ai_focus(&mut d, shape, &text("original"));
+                    Ok(())
+                }
+                "replace" => deck::ai_replace(&mut d, &a["target"], &text("text")),
+                "insert" => deck::ai_insert(&mut d, &text("text")),
+                o => Err(format!("unknown writing op {o}")),
+            };
+            let state = deck::state(&mut d);
+            Ok(json!({ "error": r.err(), "state": state }))
         }
         "deck.commands" => Ok(deck::commands(&*deck_of(u(a, "id")?)?.lock().unwrap())),
         "deck.text" => Ok(deck::text(&mut deck_of(u(a, "id")?)?.lock().unwrap())),

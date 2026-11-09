@@ -195,3 +195,121 @@ pub fn commands() -> Json {
 pub fn text(w: &mut WordDoc) -> String {
     w.session.counted_text()
 }
+
+// ---------------- the writing assistant ----------------
+
+/// Every body paragraph with some text, for the writing assistant.
+pub fn ai_units(w: &mut WordDoc) -> Json {
+    let list: Vec<Json> = w
+        .session
+        .doc
+        .body
+        .iter()
+        .enumerate()
+        .take(5000)
+        .filter_map(|(i, b)| {
+            let p = b.as_para()?;
+            let t = p.plain_text();
+            (t.trim().chars().count() >= 3).then(|| json!({ "key": { "block": i }, "text": t }))
+        })
+        .collect();
+    json!({ "rev": w.session.rev(), "units": list })
+}
+
+/// Where `original` is in paragraph `block`: (start, end) byte offsets of its text.
+fn find_in(w: &WordDoc, block: usize, original: &str) -> Option<(usize, usize)> {
+    let raw = &w.session.doc.body.get(block)?.as_para()?.text;
+    let b0 = raw.find(original)?;
+    Some((b0, b0 + original.len()))
+}
+
+/// The rectangles (page, x, y, w, h in points) of each [{block, original}].
+pub fn ai_marks(w: &mut WordDoc, items: &[Json]) -> Json {
+    let found: Vec<Option<(usize, usize, usize)>> = items
+        .iter()
+        .map(|it| {
+            let block = it["block"].as_u64()? as usize;
+            let (a, b) = find_in(w, block, it["original"].as_str()?)?;
+            Some((block, a, b))
+        })
+        .collect();
+    let s = &mut w.session;
+    let l = s.layout();
+    let out: Vec<Json> = found
+        .into_iter()
+        .map(|f| match f {
+            Some((block, a, b)) => json!(l
+                .selection_rects(&s.doc, &wordcraft_doc::Pos::body(block, a), &wordcraft_doc::Pos::body(block, b), 0)
+                .into_iter()
+                .take(40)
+                .filter(|(_, r)| r.w > 0.5)
+                .map(|(p, r)| json!([p, r.x, r.y, r.w, r.h]))
+                .collect::<Vec<_>>()),
+            None => json!([]),
+        })
+        .collect();
+    json!(out)
+}
+
+fn select(w: &mut WordDoc, a: wordcraft_doc::Pos, b: wordcraft_doc::Pos) {
+    let s = &mut w.session;
+    let (a, b) = (s.doc.clamp(&a), s.doc.clamp(&b));
+    s.sel = wordcraft_engine::Selection { anchor: a, focus: b };
+}
+
+/// Replace `original` in paragraph `block` with `replacement` (one undo step).
+pub fn ai_apply(w: &mut WordDoc, block: usize, original: &str, replacement: &str) -> Result<(), String> {
+    let (a, b) = find_in(w, block, original).ok_or("The text has changed since it was checked")?;
+    select(w, wordcraft_doc::Pos::body(block, a), wordcraft_doc::Pos::body(block, b));
+    if w.session.selected_text() != original {
+        return Err("The text has changed since it was checked".into());
+    }
+    w.session.run("text.insert", &json!({ "text": replacement })).map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Select `original` in paragraph `block` (to show it).
+pub fn ai_focus(w: &mut WordDoc, block: usize, original: &str) {
+    let (a, b) = find_in(w, block, original).unwrap_or((0, 0));
+    select(w, wordcraft_doc::Pos::body(block, a), wordcraft_doc::Pos::body(block, b));
+}
+
+/// What Ask AI / Translate work on: the selection, or the paragraph at the caret.
+pub fn ai_target(w: &mut WordDoc) -> Json {
+    let s = &w.session;
+    let (a, b) = s.sel.ordered();
+    if a != b {
+        let text = s.selected_text();
+        if text.trim().is_empty() {
+            return Json::Null;
+        }
+        return json!({ "text": text, "selection": true, "start": a, "end": b });
+    }
+    let Some(para) = s.doc.para_at(&s.sel.focus) else { return Json::Null };
+    let text = para.plain_text();
+    if text.trim().is_empty() {
+        return Json::Null;
+    }
+    let mut start = s.sel.focus.clone();
+    start.off = 0;
+    let mut end = s.sel.focus.clone();
+    end.off = para.len();
+    json!({ "text": text, "selection": false, "start": start, "end": end })
+}
+
+/// Replace what `ai_target` returned (if it is still the same) with `text`.
+pub fn ai_replace(w: &mut WordDoc, start: &Json, end: &Json, expect: &str, text: &str) -> Result<(), String> {
+    let a: wordcraft_doc::Pos = serde_json::from_value(start.clone()).map_err(|e| e.to_string())?;
+    let b: wordcraft_doc::Pos = serde_json::from_value(end.clone()).map_err(|e| e.to_string())?;
+    select(w, a, b);
+    if w.session.selected_text() != expect {
+        return Err("The text has changed since it was read".into());
+    }
+    w.session.run("text.insert", &json!({ "text": text })).map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Insert `text` after the selection (or at the caret).
+pub fn ai_insert(w: &mut WordDoc, text: &str) -> Result<(), String> {
+    let (_, end) = w.session.sel.ordered();
+    w.session.sel = wordcraft_engine::Selection { anchor: end.clone(), focus: end };
+    w.session.run("text.insert", &json!({ "text": text })).map(|_| ()).map_err(|e| e.to_string())
+}

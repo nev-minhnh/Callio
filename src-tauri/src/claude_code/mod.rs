@@ -386,6 +386,10 @@ pub struct CcRequest {
     /// stream summarized thinking
     #[serde(default)]
     thinking: bool,
+    /// web access: None = Claude Code decides (its own WebSearch), "off" = no web,
+    /// "<engine>" = search only with that engine through Callio's web_search tool
+    #[serde(default)]
+    web: Option<String>,
 }
 
 #[derive(Serialize, Default)]
@@ -492,12 +496,29 @@ static NO_THINKING_DISPLAY: std::sync::atomic::AtomicBool = std::sync::atomic::A
 pub struct Extra<'a> {
     pub effort: Option<&'a str>,
     pub thinking: bool,
+    /// None: Claude Code's own web tools; Some("off"): none; Some(engine): Callio's web_search
+    pub web: Option<&'a str>,
 }
 
 pub fn run_args(mcp_cfg: &Path, sys_file: &Path, mode: &str, model: Option<&str>, session: Option<&str>, extra: &Extra) -> Vec<std::ffi::OsString> {
     let mut a: Vec<std::ffi::OsString> = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--mcp-config"].iter().map(Into::into).collect();
     a.push(mcp_cfg.into());
-    for x in ["--permission-prompt-tool", "mcp__callio__approve", "--allowedTools", "mcp__callio__editor_state,mcp__callio__compile,mcp__callio__open_file,mcp__callio__search_library,mcp__callio__read_library_paper,mcp__callio__library_bibtex,mcp__callio__read_pdf,mcp__callio__view_pdf_page", "--append-system-prompt-file"] {
+    let mut allowed = String::from("mcp__callio__editor_state,mcp__callio__compile,mcp__callio__open_file,mcp__callio__search_library,mcp__callio__read_library_paper,mcp__callio__library_bibtex,mcp__callio__read_pdf,mcp__callio__view_pdf_page");
+    match extra.web {
+        Some("off") => {
+            a.push("--disallowedTools".into());
+            a.push("WebSearch,WebFetch,mcp__callio__web_search".into());
+        }
+        Some(engine) if !engine.is_empty() && engine != "auto" => {
+            // the author's engine instead of Claude Code's own search
+            crate::websearch::set_cc_engine(engine);
+            allowed.push_str(",mcp__callio__web_search,WebFetch");
+            a.push("--disallowedTools".into());
+            a.push("WebSearch".into());
+        }
+        _ => a.extend(["--disallowedTools".into(), "mcp__callio__web_search".into()]),
+    }
+    for x in ["--permission-prompt-tool", "mcp__callio__approve", "--allowedTools", allowed.as_str(), "--append-system-prompt-file"] {
         a.push(x.into());
     }
     a.push(sys_file.into());
@@ -569,7 +590,7 @@ pub async fn cc_run(app: AppHandle, req: CcRequest) -> CmdResult<CcResult> {
     }
 
     let mut c = claude_cmd(&exe);
-    let extra = Extra { effort: req.effort.as_deref(), thinking: req.thinking };
+    let extra = Extra { effort: req.effort.as_deref(), thinking: req.thinking, web: req.web.as_deref() };
     let with_display = req.thinking && !NO_THINKING_DISPLAY.load(std::sync::atomic::Ordering::Relaxed);
     c.current_dir(&cwd).args(run_args(&mcp_cfg, &sys_file, &req.permission_mode, req.model.as_deref(), req.session_id.as_deref(), &extra));
     c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -835,7 +856,7 @@ mod tests {
         let (e2, d2, c2, s2) = (exe.clone(), d.clone(), cfg.clone(), sys.clone());
         let run = move |prompt: &str, session: Option<String>| {
             let mut c = claude_cmd(&e2);
-            c.current_dir(&d2).args(run_args(&c2, &s2, "default", Some("claude-haiku-5-5"), session.as_deref(), &Extra { effort: Some("low"), thinking: true }));
+            c.current_dir(&d2).args(run_args(&c2, &s2, "default", Some("claude-haiku-5-5"), session.as_deref(), &Extra { effort: Some("low"), thinking: true, web: Some("off") }));
             c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
             let mut ch = c.spawn().unwrap();
             ch.stdin.take().unwrap().write_all(prompt.as_bytes()).unwrap();

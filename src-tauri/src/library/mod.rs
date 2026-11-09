@@ -755,6 +755,46 @@ pub async fn lib_enrich(app: AppHandle, id: String, doi: Option<String>, title: 
     Ok(ok)
 }
 
+/// Details found by the AI and the web for a PDF that had none (see the window's `findDetails`):
+/// fills the empty fields (and a title that was only a guess), then gives the paper a real
+/// citation key when it isn't cited anywhere yet.
+#[tauri::command]
+pub async fn lib_fill(app: AppHandle, id: String, meta: Value) -> CmdResult<Option<Paper>> {
+    valid_id(&id).es()?;
+    let mut q: Paper = serde_json::from_value(meta).es()?;
+    sanitize(&mut q);
+    q.title = q.title.split_whitespace().collect::<Vec<_>>().join(" ");
+    q.doi = clean_doi(&q.doi);
+    let out = with(&app, true, |l| {
+        let keys: std::collections::HashSet<String> = l.papers.iter().filter(|p| p.id != id).map(|p| p.key.to_lowercase()).collect();
+        let p = l.papers.iter_mut().find(|p| p.id == id)?;
+        if !p.doi.is_empty() && !q.doi.is_empty() && !p.doi.eq_ignore_ascii_case(&q.doi) {
+            return None;
+        }
+        let had_authors = !p.authors.is_empty();
+        if (p.title == PLACEHOLDER || p.title.is_empty() || p.title_guess) && !q.title.is_empty() {
+            p.title = q.title.clone();
+            p.title_guess = false;
+        }
+        if !q.kind.is_empty() && (p.kind.is_empty() || p.kind == "misc" || !had_authors) {
+            p.kind = q.kind.clone();
+        }
+        macro_rules! fill { ($($f:ident),*) => { $( if p.$f.is_empty() { p.$f = q.$f.clone(); } )* } }
+        fill!(doi, arxiv, authors, venue, volume, issue, pages, publisher, abstract_, url);
+        if p.year.is_none() {
+            p.year = q.year;
+        }
+        if p.used_in.is_empty() && (!had_authors || p.key.starts_with("anon")) {
+            p.key = make_key(p, &|k| keys.contains(&k.to_lowercase()));
+        }
+        p.modified = now_ms();
+        Some(p.clone())
+    })
+    .es()?;
+    let _ = app.emit("library-changed", json!({"id": id, "silent": true}));
+    Ok(out)
+}
+
 /// Sign in to a publisher in a Callio window to get a PDF; the session is kept for next time.
 /// Emits "library-pdf-login" {id, ok, message} when the PDF arrived or the window was closed.
 #[tauri::command]

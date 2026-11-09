@@ -1,513 +1,824 @@
-// Writing suggestions (like Grammarly) and Translate, for the text editors (Markdown, LaTeX, plain
-// text…). The author's own AI account does the work: spelling, grammar, punctuation, style and
-// clarity issues come back as underlines; clicking one opens a card at the mouse with the fixes,
-// and the card can switch the model, provider, effort and thinking, take an instruction and pick
-// writing guides. Translate (right-click a selection) uses Google Translate by default, or any
-// AI model that is set up.
+// Callio's writing assistant, working the way Grammarly does (and the way Themisio's does):
+//
+// 1. Collect — every paragraph (Markdown / LaTeX / text, Word documents), text box on the slide
+//    (presentations) or text cell (spreadsheets) is read; as you type or paste, only what changed
+//    is sent again (as you type when "Check as you type" is on, otherwise with Check now).
+// 2. Analyse — against four criteria: Correctness, Clarity, Engagement and Delivery, and the
+//    writing goals you set (domain, formality, audience, intent, language variety).
+// 3. Suggest — issues are underlined in the text (red: correctness; blue, green, purple: clarity,
+//    engagement, delivery). Hover an underline for a card with the fix and a short explanation:
+//    Accept, Dismiss, or Add to dictionary. The side panel lists them all.
+// 4. Write with AI — compose from a prompt, rephrase (formal, friendly, concise…), ideas.
+// 5. Report — an overall score (0–100), counts per criterion, the document's tone, an
+//    originality check (web search), and a progress report; a personal dictionary.
+//
+// Right-click (or Ctrl+Alt+G / K / T / D): Check writing with AI, Ask AI…, Translate, Look up
+// meaning. Double-click a word to translate it (Settings: off, Translate or Meaning).
 import { StateField, StateEffect } from "@codemirror/state";
 import { EditorView, Decoration } from "@codemirror/view";
 import { getView, addEditorExtension } from "./editor.js";
 import { call } from "./api.js";
-import { settings, updateSettings, activeTab, status, toast } from "./main.js";
+import { settings, updateSettings, activeTab, status } from "./main.js";
 import { ic } from "./icons.js";
 import { showContextMenu } from "./ctxmenu.js";
+import { openAssist, closeAssist, modelControls, pointer } from "./assist.js";
 
 const ai = () => import("./ai.js");
-const KINDS = { spelling: "Spelling", grammar: "Grammar", punctuation: "Punctuation", style: "Style", clarity: "Clarity", syntax: "Syntax", word: "Word choice", tone: "Tone" };
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const preview = (s, n) => { const t = String(s).replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n - 1) + "…" : t; };
 const TEXT_KINDS = new Set(["md", "tex", "text", "bib"]);
 
-// ---------------- issues in the editor ----------------
-const setIssues = StateEffect.define();
-const marks = {};
-const markFor = (k) => (marks[k] ||= Decoration.mark({ class: `wr-u wr-${k in KINDS ? k : "style"}` }));
-const issuesField = StateField.define({
-  create: () => [],
-  update(list, tr) {
-    let next = list;
-    if (tr.docChanged) {
-      next = next.filter((i) => !tr.changes.touchesRange(i.from, i.to)).map((i) => ({ ...i, from: tr.changes.mapPos(i.from, 1), to: tr.changes.mapPos(i.to, -1) })).filter((i) => i.to > i.from);
-    }
-    for (const e of tr.effects) if (e.is(setIssues)) next = e.value(next);
-    return next;
-  },
-  provide: (f) => EditorView.decorations.from(f, (list) => Decoration.set([...list].sort((a, b) => a.from - b.from).map((i) => markFor(i.kind).range(i.from, i.to)), true)),
-});
-const issuesOf = (v = getView()) => v?.state.field(issuesField, false) || [];
-const issueAt = (v, pos) => issuesOf(v).find((i) => pos >= i.from && pos <= i.to);
+// ---------------------------------------------------------------- the four criteria
+const CATS = [
+  { id: "correctness", label: "Correctness", color: "#f03c45", weight: 4 },
+  { id: "clarity", label: "Clarity", color: "#1a8cf8", weight: 2 },
+  { id: "engagement", label: "Engagement", color: "#2bb86a", weight: 1 },
+  { id: "delivery", label: "Delivery", color: "#8b5cf6", weight: 1.5 },
+];
+const cat = (id) => CATS.find((c) => c.id === id) || CATS[0];
+const parseCat = (s) => { const v = String(s || "").trim().toLowerCase(); return v === "clarity" ? "clarity" : v === "engagement" ? "engagement" : v === "delivery" || v === "tone" ? "delivery" : "correctness"; };
 
-let hoverT = 0;
-const handlers = EditorView.domEventHandlers({
-  mousedown(e, v) {
-    if (e.button !== 0) return false;
-    const pos = v.posAtCoords({ x: e.clientX, y: e.clientY });
-    const it = pos != null && issueAt(v, pos);
-    if (it) setTimeout(() => openCard({ x: e.clientX, y: e.clientY }, it), 0);
-    return false;
-  },
-  mousemove(e, v) {
-    clearTimeout(hoverT);
-    if (!e.target.closest?.(".wr-u")) return false;
-    hoverT = setTimeout(() => {
-      const pos = v.posAtCoords({ x: e.clientX, y: e.clientY });
-      const it = pos != null && issueAt(v, pos);
-      if (it && card?.issue !== it) openCard({ x: e.clientX, y: e.clientY }, it);
-    }, 450);
-    return false;
-  },
-  contextmenu(e, v) { editorMenu(e, v); return true; },
-});
-const edited = EditorView.updateListener.of((u) => { if (u.docChanged && u.transactions.some((t) => t.isUserEvent("input") || t.isUserEvent("delete"))) onEdited(); });
-export function initWriting() {
-  addEditorExtension((kind) => (TEXT_KINDS.has(kind) ? [issuesField, handlers, edited] : [EditorView.domEventHandlers({ contextmenu(e, v) { editorMenu(e, v); return true; } })]));
-  const b = document.getElementById("btn-write");
-  if (b) b.onclick = () => { const r = b.getBoundingClientRect(); openCard({ x: r.left, y: r.bottom - 14 }); };
+const DOMAINS = ["General", "Academic", "Business", "Email", "Technical", "Creative", "Casual"];
+const FORMALITY = ["Informal", "Neutral", "Formal"];
+const AUDIENCE = ["General", "Knowledgeable", "Expert"];
+const INTENT = ["Inform", "Describe", "Convince", "Tell a story"];
+const VARIANTS = [["auto", "Same as the text"], ["en-US", "American English"], ["en-GB", "British English"], ["en-CA", "Canadian English"], ["en-AU", "Australian English"], ["en-IN", "Indian English"], ["vi", "Vietnamese"]];
+
+function cfg() {
+  const w = settings.writer || {};
+  return {
+    goals: { domain: "General", formality: "Neutral", audience: "General", intent: "Inform", variant: "auto", ...(w.goals || {}) },
+    dictionary: w.dictionary || [],
+    stats: { accepted: [0, 0, 0, 0], dismissed: 0, weeks: {}, ...(w.stats || {}) },
+    auto: !!w.auto,
+    delay: Math.max(600, w.delay || 1500),
+    enabled: w.enabled !== false,
+    dblclick: w.dblclick || "translate",
+  };
+}
+function saveCfg(patch) { updateSettings({ writer: { ...(settings.writer || {}), ...patch } }); }
+
+function hashOf(text, goals) {
+  let h = 2166136261 >>> 0;
+  const s = text + "\u0001" + JSON.stringify(goals);
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  return h.toString(36) + ":" + s.length;
+}
+const words = (t) => (t.match(/\S+/g) || []).length;
+function weekKey() {
+  const d = new Date(); const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const day = t.getUTCDay() || 7; t.setUTCDate(t.getUTCDate() + 4 - day);
+  const y = t.getUTCFullYear(); const w = Math.ceil(((t - Date.UTC(y, 0, 1)) / 864e5 + 1) / 7);
+  return `${y}-W${String(w).padStart(2, "0")}`;
 }
 
-// ---------------- checking ----------------
-const ignored = new Set();
-const checked = new Map(); // paragraph text → issues found (relative), so unchanged text isn't sent twice
-let running = null;
-
-function paragraphsIn(doc, from, to) {
-  // blocks separated by blank lines, merged up to ~2500 characters
+// ---------------------------------------------------------------- hosts (where the text lives)
+function cmUnits(v) {
+  const doc = v.state.doc;
   const out = [];
-  let start = null, end = null, size = 0;
-  const flush = () => { if (start != null) out.push({ from: start, to: end }); start = null; size = 0; };
-  for (let ln = doc.lineAt(from).number; ln <= doc.lineAt(to).number; ln++) {
+  let start = null, end = null, buf = [];
+  const flush = () => { if (start != null) { const text = buf.join("\n"); if (text.trim().length >= 3) out.push({ key: { from: start }, text, from: start, to: end }); } start = null; buf = []; };
+  for (let ln = 1; ln <= doc.lines && out.length < 3000; ln++) {
     const l = doc.line(ln);
-    if (!l.text.trim()) { if (size > 1200) flush(); else if (start != null) end = l.to; continue; }
+    if (!l.text.trim()) { flush(); continue; }
     if (start == null) start = l.from;
-    end = l.to;
-    size += l.length;
-    if (size > 2500) flush();
+    end = l.to; buf.push(l.text);
   }
   flush();
   return out;
 }
 
-function writingSystem(lang, guides, instruction) {
-  return `You are a meticulous copy editor (like Grammarly) for a ${lang} document. Find real problems only: spelling, grammar, punctuation, word choice, clarity, style, tone${lang === "LaTeX" ? ", and LaTeX syntax mistakes (unbalanced braces, wrong commands)" : ""}. Work in the text's own language (Vietnamese, English, …).
-Do NOT touch: LaTeX commands, citation keys, labels, math, code, URLs, Markdown syntax, proper names spelled on purpose.
-Reply with ONLY a JSON array, no prose, no code fences. Each item:
-{"quote": "<the exact text to change, copied character for character from the input, short (one word to one sentence) and unique>", "fix": ["<replacement>", "<optional second replacement>"], "kind": "spelling|grammar|punctuation|word|clarity|style|tone|syntax", "why": "<one short sentence>"}
-Return [] when the text is fine. At most 25 items, most important first.${instruction ? `\nThe author also asks: ${instruction}` : ""}${guides ? `\n\nFollow the author's writing guides:\n${guides}` : ""}`;
+const HOSTS = {
+  text: {
+    async units() { const v = getView(); return v ? { rev: v.state.doc.length + ":" + v.state.doc.toString().length + ":" + cmRev, units: cmUnits(v) } : { units: [] }; },
+    async apply(unit, original, replacement) {
+      const v = getView(); if (!v) throw new Error("No editor");
+      const cur = cmUnits(v).find((u) => u.text === unit.text) || cmUnits(v).find((u) => u.from === unit.key.from);
+      const i = cur ? cur.text.indexOf(original) : -1;
+      if (i < 0) throw new Error("The text has changed since it was checked");
+      v.dispatch({ changes: { from: cur.from + i, to: cur.from + i + original.length, insert: replacement }, userEvent: "input.ai" });
+    },
+    async focus(unit, original) {
+      const v = getView(); if (!v) return;
+      const cur = cmUnits(v).find((u) => u.text === unit.text); if (!cur) return;
+      const i = Math.max(0, cur.text.indexOf(original));
+      v.dispatch({ selection: { anchor: cur.from + i, head: cur.from + i + original.length }, effects: EditorView.scrollIntoView(cur.from + i, { y: "center" }) });
+      v.focus();
+    },
+    async target() {
+      const v = getView(); if (!v) return null;
+      const { from, to } = v.state.selection.main;
+      if (to > from) return { text: v.state.sliceDoc(from, to), selection: true, from, to };
+      const u = cmUnits(v).find((x) => from >= x.from && from <= x.to);
+      return u ? { text: u.text, selection: false, from: u.from, to: u.to } : null;
+    },
+    async replace(t, text) {
+      const v = getView();
+      if (v.state.sliceDoc(t.from, t.to) !== t.text) throw new Error("The text has changed since it was read");
+      v.dispatch({ changes: { from: t.from, to: t.to, insert: text }, userEvent: "input.ai" });
+    },
+    async insert(text) {
+      const v = getView(); const { to } = v.state.selection.main;
+      v.dispatch({ changes: { from: to, insert: text }, selection: { anchor: to + text.length }, userEvent: "input.ai" });
+    },
+  },
+  word: {
+    async units() { const m = await import("./word.js"); return (await m.wordAI("units")) || { units: [] }; },
+    async apply(unit, original, replacement) { const m = await import("./word.js"); await m.wordAI("apply", { block: unit.key.block, original, replacement }); },
+    async focus(unit, original) { const m = await import("./word.js"); await m.wordAI("focus", { block: unit.key.block, original }); },
+    async target() { const m = await import("./word.js"); return m.wordAI("target"); },
+    async replace(t, text) { const m = await import("./word.js"); await m.wordAI("replace", { start: t.start, end: t.end, expect: t.text, text }); },
+    async insert(text) { const m = await import("./word.js"); await m.wordAI("insert", { text }); },
+  },
+  deck: {
+    async units() { const m = await import("./deck.js"); return (await m.deckAI("units")) || { units: [] }; },
+    async apply(unit, original, replacement) { const m = await import("./deck.js"); await m.deckAI("apply", { shape: unit.key.shape, original, replacement }); },
+    async focus(unit, original) { const m = await import("./deck.js"); await m.deckAI("focus", { shape: unit.key.shape, original }); },
+    async target() { const m = await import("./deck.js"); return m.deckAI("target"); },
+    async replace(t, text) { const m = await import("./deck.js"); await m.deckAI("replace", { target: t, text }); },
+    async insert(text) { const m = await import("./deck.js"); await m.deckAI("insert", { text }); },
+  },
+  sheet: {
+    async units() { const m = await import("./sheet.js"); return (await m.sheetAI("units")) || { units: [] }; },
+    async apply(unit, original, replacement) { const m = await import("./sheet.js"); await m.sheetAI("apply", { cell: unit.key.cell, original, replacement }); },
+    async focus(unit) { const m = await import("./sheet.js"); await m.sheetAI("focus", { cell: unit.key.cell }); },
+    async target() { const m = await import("./sheet.js"); return m.sheetAI("target"); },
+    async replace(t, text) { const m = await import("./sheet.js"); await m.sheetAI("replace", { target: t, text }); },
+    async insert() { throw new Error("Pick a cell and use Replace instead."); },
+  },
+};
+function hostKind(t = activeTab()) {
+  if (!t) return null;
+  if (t.kind === "doc" && t.wordId) return "word";
+  if (t.kind === "deck") return "deck";
+  if (t.kind === "sheet" && t.sheetId) return "sheet";
+  if (TEXT_KINDS.has(t.kind) && getView()) return "text";
+  return null;
+}
+/** The host for Ask / Translate on whatever is shown (the editor, a Word document, a slide…). */
+export function currentHost() { const k = hostKind(); return k ? HOSTS[k] : null; }
+
+// ---------------------------------------------------------------- state (one per open file)
+const states = new Map();
+function stateFor(t) {
+  const key = t.path || t.id || t.name;
+  let s = states.get(key);
+  if (!s) { s = { units: [], checked: new Map(), pending: new Set(), dismissed: new Set(), tone: null, error: null, job: null, changedAt: 0, wanted: false, carry: null, rev: null }; states.set(key, s); }
+  return s;
+}
+let W = null; // the state of the file shown
+let kind = null;
+let cmRev = 0;
+const UI = { panel: false, tab: "suggestions", filter: null, expanded: null, prompt: "", goResult: null, goError: null, goBusy: false, orig: null, origBusy: false, origError: null, acceptedNow: [0, 0, 0, 0] };
+
+function visible() {
+  if (!W) return [];
+  const c = cfg();
+  const dict = new Set(c.dictionary.map((w) => w.toLowerCase()));
+  const out = [];
+  W.units.forEach((u, ui) => {
+    for (const issue of W.checked.get(u.hash) || []) {
+      if (W.dismissed.has(u.hash + "|" + issue.original) || dict.has(issue.original.trim().toLowerCase())) continue;
+      if (!u.text.includes(issue.original)) continue;
+      out.push({ unit: ui, issue });
+    }
+  });
+  return out;
+}
+function score(shown) {
+  if (!W) return null;
+  const checked = W.units.filter((u) => W.checked.has(u.hash)).reduce((n, u) => n + words(u.text), 0);
+  if (!checked) return null;
+  const penalty = shown.reduce((n, s) => n + cat(s.issue.cat).weight, 0);
+  const per100 = (penalty * 100) / Math.max(40, checked);
+  return Math.round(Math.max(0, Math.min(100, 100 / (1 + per100 / 40))));
 }
 
-function parseIssues(raw) {
-  let s = String(raw || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  const a = s.indexOf("["), b = s.lastIndexOf("]");
-  if (a < 0 || b < a) return [];
-  try { const v = JSON.parse(s.slice(a, b + 1)); return Array.isArray(v) ? v : []; } catch { return []; }
-}
-
-async function guidesText() {
-  const want = settings.writeSkills || [];
-  if (!want.length) return "";
-  const m = await ai();
-  let out = "";
-  for (const s of m.skills().filter((x) => want.includes(x.name))) {
-    const t = await m.skillContent(s).catch(() => "");
-    if (t) out += `\n## ${s.name}\n${t.slice(0, 20000)}\n`;
-  }
-  return out.slice(0, 60000);
-}
-
-/** Check the document (or `from…to`); progress in the status bar, results as underlines. */
-export async function checkWriting({ from, to, quiet = false } = {}) {
-  const v = getView();
+// ---------------------------------------------------------------- 1. collect
+let collectT = 0, collecting = null;
+function scheduleCollect(delay = 350) { clearTimeout(collectT); collectT = setTimeout(collect, delay); }
+async function collect() {
   const t = activeTab();
-  if (!v || !t || !TEXT_KINDS.has(t.kind)) { if (!quiet) toast("Writing suggestions work in Markdown, LaTeX and text files.", "", 3000); return; }
+  const k = hostKind(t);
+  if (k !== kind || (t && W !== stateFor(t))) { kind = k; W = k && t ? stateFor(t) : null; }
+  refreshButton();
+  if (!W || !cfg().enabled) { drawMarks(); refreshPanel(); return; }
+  if (collecting) { scheduleCollect(200); return; }
+  const mine = W;
+  collecting = (async () => {
+    let r;
+    try { r = await HOSTS[k].units(); } catch { return; }
+    if (mine !== W || !r) return;
+    const g = cfg().goals;
+    const units = (r.units || []).map((u) => ({ key: u.key, text: u.text, hash: hashOf(u.text, g) }));
+    // after an accepted suggestion, the paragraph's other suggestions carry over
+    if (W.carry) {
+      const { hash: oldHash, accepted, keyJson } = W.carry;
+      const old = W.checked.get(oldHash);
+      if (old) for (const u of units) if (JSON.stringify(u.key) === keyJson && !W.checked.has(u.hash)) W.checked.set(u.hash, old.filter((i) => i.original !== accepted && u.text.includes(i.original)));
+      W.carry = null;
+    }
+    const before = new Set(W.units.map((u) => u.hash));
+    if (units.some((u) => !before.has(u.hash))) W.changedAt = Date.now();
+    W.units = units;
+  })();
+  try { await collecting; } finally { collecting = null; }
+  maybeCheck();
+  refreshAll();
+}
+
+// ---------------------------------------------------------------- 2. analyse
+function systemPrompt() {
+  const c = cfg(); const g = c.goals;
+  const variant = VARIANTS.find(([v]) => v === g.variant)?.[1] || "the text's own language";
+  const uiLang = settings.uiLang === "en" ? "English" : "Vietnamese";
+  let p = `You are Callio's writing assistant, an expert editor working like Grammarly. Review each numbered unit of the user's document against four criteria:
+- correctness: spelling, grammar, punctuation, agreement, wrong or missing words (these are errors);
+- clarity: wordy, vague or hard-to-follow phrasing, needless passive voice, overlong sentences — suggest a concise rewrite;
+- engagement: repeated, flat or overused words and monotonous sentences — suggest livelier word choices (synonyms);
+- delivery: tone and formality that miss the goals, hedging, impolite or overly casual phrasing.
+Writing goals: domain ${g.domain}; formality ${g.formality}; audience ${g.audience}; intent ${g.intent}; language variety ${variant}.
+Keep each unit's language (never translate) and the author's meaning. Do not flag what is correct and fits the goals. Never change LaTeX commands, citation keys, labels, math, code, URLs or Markdown syntax.
+Reply with JSON only, no prose and no code fence:
+{"issues": [{"unit": 1, "category": "correctness|clarity|engagement|delivery", "type": "spelling|grammar|punctuation|word choice|wordiness|passive voice|repetition|tone|…", "title": "<a short action in ${uiLang}, e.g. Correct the spelling>", "original": "<exact substring of that unit>", "replacement": "<its replacement; empty to delete>", "explanation": "<one short sentence in ${uiLang}>"}], "tone": "<the document's overall tone in 2–4 words, in ${uiLang}>", "tone_fits": true}
+"original" is copied character for character from the unit and is as short as possible while unique in it. At most 8 issues per unit, most important first.`;
+  if (c.dictionary.length) p += `\nNever flag these words (the author's dictionary): ${c.dictionary.join(", ")}.`;
+  if (settings.aiInstructions?.trim()) p += `\n\nThe author's standing instructions:\n${settings.aiInstructions.trim()}`;
+  return p;
+}
+function jsonIn(s) {
+  s = String(s || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  const a = s.indexOf("{"), b = s.lastIndexOf("}");
+  if (a < 0 || b < a) return null;
+  try { return JSON.parse(s.slice(a, b + 1)); } catch { return null; }
+}
+function parseBatch(answer, batch) {
+  const v = jsonIn(answer);
+  if (!v) throw new Error("The model didn't answer in the expected form. Try again, or pick another model.");
+  const by = batch.map(() => []);
+  for (const i of v.issues || []) {
+    const n = +i.unit;
+    if (!(n >= 1 && n <= batch.length)) continue;
+    const text = batch[n - 1].text;
+    const original = String(i.original || ""), replacement = String(i.replacement ?? "");
+    if (!original || original === replacement || !text.includes(original)) continue;
+    const list = by[n - 1];
+    if (list.some((x) => x.original === original) || list.length >= 8) continue;
+    list.push({ cat: parseCat(i.category), kind: String(i.type || ""), title: String(i.title || ""), original, replacement, explanation: String(i.explanation || "") });
+  }
+  const tone = typeof v.tone === "string" && v.tone.trim() ? { tone: v.tone, fits: v.tone_fits !== false } : null;
+  return { results: batch.map((b, k) => [b.hash, by[k]]), tone };
+}
+function writeModel() { return settings.aiModel_write || null; }
+
+async function maybeCheck() {
+  if (!W || W.job) return;
+  const c = cfg();
+  const due = W.wanted || (c.auto && Date.now() - W.changedAt >= c.delay);
+  if (!due) { if (c.auto && W.units.some((u) => !W.checked.has(u.hash))) { clearTimeout(W.autoT); W.autoT = setTimeout(maybeCheck, c.delay); } return; }
+  const todo = [];
+  let size = 0;
+  for (const u of W.units) {
+    if (W.checked.has(u.hash) || W.pending.has(u.hash) || todo.some((x) => x.hash === u.hash)) continue;
+    if (todo.length >= 24 || size + u.text.length >= 7000) break;
+    todo.push(u); size += u.text.length;
+  }
+  if (!todo.length) { W.wanted = false; refreshAll(); return; }
   const m = await ai();
-  const model = settings.aiModel_write || m.modelFor("edit");
-  if (!model) { if (!quiet) toast("Set up an AI model first (Settings → AI).", "", 3500); return; }
-  if (running) running.cancelled = true;
-  const job = (running = { cancelled: false });
-  const doc = v.state.doc;
-  const a = from ?? 0, b = to ?? doc.length;
-  const paras = paragraphsIn(doc, a, b).filter((p) => doc.sliceString(p.from, p.to).trim().length > 3);
-  const lang = t.kind === "tex" || t.kind === "bib" ? "LaTeX" : t.kind === "md" ? "Markdown" : "plain text";
-  const guides = await guidesText();
-  const system = writingSystem(lang, guides, settings.writeInstruction || "");
-  let found = 0, done = 0;
-  const { loading } = await import("./loading.js");
-  const ld = quiet ? null : loading("Checking the writing…", { delay: 0, detail: `${paras.length} paragraph${paras.length === 1 ? "" : "s"}`, cancel: () => { job.cancelled = true; } });
+  const model = writeModel() || m.modelFor("edit");
+  if (!model) { W.wanted = false; W.error = "Sign in to an AI provider in Settings › AI first."; UI.panel = true; refreshAll(); return; }
+  const mine = W;
+  todo.forEach((u) => mine.pending.add(u.hash));
+  mine.error = null;
+  const numbered = todo.map((u, i) => `[${i + 1}] ${u.text}\n\n`).join("");
+  const job = (mine.job = { started: Date.now(), idRef: {} });
+  refreshAll();
   try {
-    // two at a time: quick, without flooding the provider
-    const queue = [...paras];
-    const worker = async () => {
-      while (queue.length && !job.cancelled) {
-        const p = queue.shift();
-        const text = v.state.doc.sliceString(p.from, p.to);
-        const key = model + "|" + (settings.writeInstruction || "") + "|" + text;
-        let list = checked.get(key);
-        if (!list) {
-          const raw = await m.runAI("write", { model, system, messages: [{ role: "user", content: text }], temperature: 0.1, maxTokens: 2000, effort: settings.writeEffort || null, thinking: !!settings.writeThinking });
-          list = parseIssues(raw);
-          checked.set(key, list);
-          if (checked.size > 400) checked.delete(checked.keys().next().value);
-        }
-        if (job.cancelled) return;
-        // place each quote in the paragraph as it is now
-        const cur = getView();
-        if (!cur) return;
-        const now = cur.state.doc.sliceString(p.from, Math.min(p.to, cur.state.doc.length));
-        if (now !== text) continue; // edited meanwhile: the next check catches it
-        const add = [];
-        let at = 0;
-        for (const it of list) {
-          const q = String(it.quote || "");
-          if (!q || ignored.has(q + "|" + it.why)) continue;
-          let i = now.indexOf(q, at);
-          if (i < 0) i = now.indexOf(q);
-          if (i < 0) continue;
-          at = i + q.length;
-          const fixes = (Array.isArray(it.fix) ? it.fix : [it.fix]).map(String).filter((f) => f !== q).slice(0, 3);
-          if (!fixes.length && !it.why) continue;
-          add.push({ from: p.from + i, to: p.from + i + q.length, quote: q, fixes, kind: String(it.kind || "style").toLowerCase(), why: String(it.why || "") });
-        }
-        found += add.length;
-        cur.dispatch({ effects: setIssues.of((old) => [...old.filter((o) => o.to <= p.from || o.from >= p.to), ...add]) });
-        done++;
-        ld?.set(done / paras.length, null, `${done} of ${paras.length} · ${found} suggestion${found === 1 ? "" : "s"}`);
-        updateBadge();
-      }
-    };
-    await Promise.all([worker(), worker()]);
-    if (!quiet && !job.cancelled) status(found ? `${found} writing suggestion${found === 1 ? "" : "s"} — click an underline` : "No writing problems found", "ok");
+    const answer = await m.runAI("write", { model, idRef: job.idRef, system: systemPrompt(), messages: [{ role: "user", content: numbered }], maxTokens: 8000, effort: settings.writeEffort || null, thinking: !!settings.writeThinking });
+    if (mine.job !== job) return;
+    const b = parseBatch(answer, todo);
+    for (const [h, list] of b.results) { mine.pending.delete(h); mine.checked.set(h, list); }
+    if (b.tone) mine.tone = b.tone;
   } catch (e) {
-    if (!quiet) status(`Writing check failed: ${e.message === "NO_MODEL" ? "set up an AI model first" : e.message}`, "err");
-  } finally { ld?.done(); if (running === job) running = null; updateBadge(); }
-}
-
-// check as you type: the paragraph you left, after a pause
-let autoT = 0;
-export function onEdited() {
-  if (!settings.writeAuto) return;
-  clearTimeout(autoT);
-  autoT = setTimeout(() => {
-    const v = getView(); const t = activeTab();
-    if (!v || !t || !TEXT_KINDS.has(t.kind)) return;
-    const head = v.state.selection.main.head;
-    const [p] = paragraphsIn(v.state.doc, head, head);
-    if (p) checkWriting({ from: p.from, to: p.to, quiet: true });
-  }, 2500);
-}
-
-function updateBadge() {
-  const n = issuesOf().length;
-  const b = document.querySelector("#btn-write .wr-count");
-  if (b) { b.textContent = n || ""; b.hidden = !n; }
-}
-
-// ---------------- the card at the mouse ----------------
-let card = null;
-function closeCard() { card?.el.remove(); card = null; document.removeEventListener("pointerdown", awayCard, true); document.removeEventListener("keydown", escCard, true); }
-function awayCard(e) { if (card && !card.el.contains(e.target) && !e.target.closest?.(".wr-u")) closeCard(); }
-function escCard(e) { if (e.key === "Escape" && card) { e.stopPropagation(); closeCard(); } }
-
-async function modelControls(role, effortKey, thinkKey) {
-  const m = await ai();
-  const wrap = document.createElement("div");
-  wrap.className = "wr-models";
-  const sel = document.createElement("select");
-  sel.className = "wr-model";
-  sel.title = "Provider and model";
-  m.fillModelOptions(sel, { claudeCode: true });
-  if (role === "translate") {
-    const g = document.createElement("optgroup"); g.label = "Translation services";
-    const o = document.createElement("option"); o.value = "google"; o.textContent = "Google Translate"; g.appendChild(o);
-    sel.prepend(g);
+    if (mine.job !== job) return;
+    todo.forEach((u) => mine.pending.delete(u.hash));
+    mine.wanted = false;
+    mine.error = e.message === "NO_MODEL" ? "Sign in to an AI provider in Settings › AI first." : e.message || String(e);
+    status(`Writing check: ${mine.error}`, "err");
+  } finally {
+    if (mine.job === job) mine.job = null;
   }
-  [...sel.querySelectorAll('option[value="claudecode|__other"]')].forEach((o) => o.remove());
-  const key = `aiModel_${role}`;
-  if (role !== "translate" && !sel.querySelector("option")) {
-    const o = document.createElement("option"); o.value = ""; o.textContent = "Set up an AI model…"; sel.appendChild(o);
+  refreshAll();
+  if (mine === W && (mine.wanted || cfg().auto)) setTimeout(maybeCheck, 50);
+}
+
+/** Open the panel and check everything (Check writing). */
+export function checkNow() {
+  const t = activeTab();
+  if (!hostKind(t)) { status("The writing assistant works in Markdown, LaTeX and text files, Word documents, presentations and spreadsheets.", "err"); return; }
+  UI.panel = true; UI.tab = "suggestions";
+  collect().then(() => { if (W) { W.wanted = true; W.error = null; maybeCheck(); } refreshAll(); });
+}
+
+// ---------------------------------------------------------------- 3. suggest: underlines
+// Markdown / LaTeX / text: CodeMirror marks
+const setMarks = StateEffect.define();
+const markCache = {};
+const markFor = (c) => (markCache[c] ||= Decoration.mark({ class: `wr-u wr-${c}` }));
+const marksField = StateField.define({
+  create: () => Decoration.none,
+  update(d, tr) { d = d.map(tr.changes); for (const e of tr.effects) if (e.is(setMarks)) d = e.value; return d; },
+  provide: (f) => EditorView.decorations.from(f),
+});
+addEditorExtension((k) => (TEXT_KINDS.has(k) ? [marksField, EditorView.updateListener.of((u) => { if (u.docChanged) { cmRev++; scheduleCollect(300); } })] : []));
+
+let marksRaf = 0;
+function drawMarks() { if (!marksRaf) marksRaf = requestAnimationFrame(() => { marksRaf = 0; drawMarksNow(); }); }
+async function drawMarksNow() {
+  const shown = W && cfg().enabled ? visible().slice(0, 150) : [];
+  const v = getView();
+  if (v && v.state.field(marksField, false) !== undefined) {
+    const ranges = [];
+    if (kind === "text") {
+      const units = cmUnits(v);
+      for (const s of shown) {
+        const u = W.units[s.unit];
+        const cur = units.find((x) => x.text === u.text);
+        if (!cur) continue;
+        const i = cur.text.indexOf(s.issue.original);
+        if (i >= 0) ranges.push(markFor(s.issue.cat).range(cur.from + i, cur.from + i + s.issue.original.length));
+      }
+    }
+    ranges.sort((a, b) => a.from - b.from);
+    try { v.dispatch({ effects: setMarks.of(Decoration.set(ranges, true)) }); } catch { /* view gone */ }
   }
-  sel.value = settings[key] || (role === "translate" ? "google" : m.modelFor("edit") || "");
-  if (!sel.value && sel.options.length) sel.selectedIndex = 0;
-  const eff = document.createElement("select");
-  eff.className = "wr-effort";
-  eff.title = "Effort (Claude models)";
-  eff.innerHTML = `<option value="">Effort: default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra</option>`;
-  eff.value = settings[effortKey] || "";
-  const think = document.createElement("label");
-  think.className = "switch wr-think";
-  think.title = "Let the model think first (slower, sometimes better)";
-  think.innerHTML = `<span>Thinking</span><input type="checkbox"${settings[thinkKey] ? " checked" : ""}><span class="knob"></span>`;
-  const sync = () => {
-    const v = sel.value;
-    const isAi = v && v !== "google";
-    eff.hidden = !isAi || !m.isClaudeModel(v) || /haiku/.test(v);
-    think.hidden = !isAi;
-  };
-  sel.onchange = () => { if (!sel.value) { import("./settings.js").then((x) => x.openSettings("ai")); return; } updateSettings({ [key]: sel.value }); sync(); };
-  eff.onchange = () => updateSettings({ [effortKey]: eff.value });
-  think.querySelector("input").onchange = (e) => updateSettings({ [thinkKey]: e.target.checked });
-  sync();
-  wrap.append(sel, eff, think);
-  return wrap;
+  // Word documents: lines drawn on the pages
+  document.querySelectorAll(".wd-page .wr-layer").forEach((l) => (l.innerHTML = ""));
+  if (kind === "word" && shown.length) {
+    const wm = await import("./word.js");
+    const view = wm.wordView();
+    if (!view) return;
+    const items = shown.map((s) => ({ block: W.units[s.unit].key.block, original: s.issue.original }));
+    let rects;
+    try { rects = await wm.wordAI("marks", { items }); } catch { return; }
+    const v2 = wm.wordView(); if (!v2) return;
+    const z = v2.z;
+    shown.forEach((s, k) => {
+      for (const [pg, x, y, w, h] of rects?.[k] || []) {
+        const page = v2.pages[pg]; if (!page) continue;
+        let layer = page.querySelector(".wr-layer");
+        if (!layer) { layer = document.createElement("div"); layer.className = "wr-layer"; page.appendChild(layer); }
+        const d = document.createElement("div");
+        d.className = `wr-pm wr-${s.issue.cat}`;
+        d.style.cssText = `left:${x * z}px;top:${y * z}px;width:${Math.max(3, w * z)}px;height:${h * z}px`;
+        d._sh = s;
+        layer.appendChild(d);
+      }
+    });
+  }
 }
 
-function place(el, at) {
-  document.body.appendChild(el);
-  const w = el.offsetWidth, h = el.offsetHeight;
-  let x = at.x + 4, y = at.y + 18;
-  if (x + w > innerWidth - 10) x = innerWidth - w - 10;
-  if (y + h > innerHeight - 10) y = Math.max(10, at.y - h - 10);
-  el.style.left = Math.max(10, x) + "px";
-  el.style.top = y + "px";
+// the card when the pointer rests on an underline
+let card = null, cardLeftT = 0, hoverT = 0;
+function closeCard() { clearTimeout(cardLeftT); card?.el.remove(); card = null; }
+function shownAtCM(e) {
+  const v = getView(); if (!v || kind !== "text") return null;
+  const pos = v.posAtCoords({ x: e.clientX, y: e.clientY }); if (pos == null) return null;
+  const units = cmUnits(v);
+  for (const s of visible()) {
+    const u = W.units[s.unit]; const cur = units.find((x) => x.text === u.text); if (!cur) continue;
+    const i = cur.text.indexOf(s.issue.original); if (i < 0) continue;
+    if (pos >= cur.from + i && pos <= cur.from + i + s.issue.original.length) return s;
+  }
+  return null;
 }
+document.addEventListener("mousemove", (e) => {
+  if (card?.el.contains(e.target)) { clearTimeout(cardLeftT); cardLeftT = 0; return; }
+  const onMark = e.target.closest?.(".wr-u, .wr-pm");
+  if (!onMark) {
+    // pointer left the underline and the card: the card goes shortly after
+    if (card && !cardLeftT) cardLeftT = setTimeout(closeCard, 350);
+    clearTimeout(hoverT); hoverT = 0;
+    return;
+  }
+  clearTimeout(cardLeftT); cardLeftT = 0;
+  if (hoverT) return;
+  hoverT = setTimeout(() => {
+    hoverT = 0;
+    const s = onMark._sh || shownAtCM(e);
+    if (!s || (card && card.key === s.issue.original + s.unit)) return;
+    const r = onMark.getBoundingClientRect();
+    openCard(s, { x: Math.max(r.left, Math.min(e.clientX - 40, r.right)), y: r.bottom + 6 });
+  }, 140);
+}, { passive: true });
+// Word: the lines are under the page's input layer, so find them by position
+document.addEventListener("mousemove", (e) => {
+  if (kind !== "word" || !W) return;
+  const page = e.target.closest?.(".wd-page"); if (!page) return;
+  for (const d of page.querySelectorAll(".wr-pm")) {
+    const r = d.getBoundingClientRect();
+    if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top - 2 && e.clientY <= r.bottom + 3) {
+      d.classList.add("hot");
+      if (!card || card.key !== d._sh.issue.original + d._sh.unit) { clearTimeout(cardLeftT); cardLeftT = 0; clearTimeout(hoverT); hoverT = setTimeout(() => { hoverT = 0; openCard(d._sh, { x: Math.max(r.left, e.clientX - 40), y: r.bottom + 6 }); }, 140); }
+      else { clearTimeout(cardLeftT); cardLeftT = 0; }
+      return;
+    } else d.classList.remove("hot");
+  }
+}, { passive: true });
 
-/** Open the suggestions card at `at` (mouse point) — for an issue, or the general panel. */
-export async function openCard(at, issue = null) {
+function issueBody(el, s, { inCard }) {
+  const c = cat(s.issue.cat);
+  el.innerHTML = `
+    <div class="wr-kind"><span class="wr-dot" style="--c:${c.color}"></span><span style="color:${c.color}">${c.label}</span>${s.issue.kind ? `<span class="note">· ${esc(s.issue.kind)}</span>` : ""}</div>
+    ${s.issue.title ? `<div class="wr-title">${esc(s.issue.title)}</div>` : ""}
+    <div class="wr-fixline"><s class="wr-orig">${esc(s.issue.original)}</s><button class="wr-fix" title="Accept">${esc(s.issue.replacement || "(remove)")}</button></div>
+    ${s.issue.explanation ? `<div class="wr-expl">${esc(s.issue.explanation)}</div>` : ""}
+    <div class="wr-acts">${inCard ? "" : `<button class="small wr-accept">${ic("check")}<span>Accept</span></button>`}<button class="small wr-dismiss">${ic("eye-off")}<span>Dismiss</span></button>${!/\s/.test(s.issue.original.trim()) && s.issue.cat === "correctness" ? `<button class="small wr-learn">${ic("plus")}<span>Add to dictionary</span></button>` : ""}</div>`;
+  el.querySelector(".wr-fix").onclick = () => accept(s);
+  el.querySelector(".wr-accept")?.addEventListener("click", () => accept(s));
+  el.querySelector(".wr-dismiss").onclick = () => dismiss(s);
+  el.querySelector(".wr-learn")?.addEventListener("click", () => learn(s.issue.original));
+}
+function openCard(s, at) {
   closeCard();
   const el = document.createElement("div");
   el.className = "wr-card";
-  el.setAttribute("role", "dialog");
-  const m = await ai();
-  const n = issuesOf().length;
-  el.innerHTML = `
-    <div class="wr-head">${ic("wand")}<b>Writing suggestions</b><span class="note">${n ? `${n} in this file` : ""}</span><span class="tb-spacer"></span><button class="icon small wr-x" title="Close (Esc)">${ic("x")}</button></div>
-    ${issue ? `<div class="wr-issue"><span class="wr-kind wr-k-${issue.kind}">${KINDS[issue.kind] || "Suggestion"}</span><div class="wr-why"></div><div class="wr-from"><s></s></div><div class="wr-fixes"></div>
-      <div class="wr-row"><button class="small wr-ignore">${ic("eye-off")}<span>Ignore</span></button><button class="small wr-all" title="Apply every suggestion of this kind">${ic("check")}<span>Fix all ${KINDS[issue.kind] ? KINDS[issue.kind].toLowerCase() : ""}</span></button><span class="tb-spacer"></span><button class="icon small wr-prev" title="Previous">${ic("arrow-up")}</button><button class="icon small wr-next" title="Next">${ic("arrow-down")}</button></div></div>` : ""}
-    <div class="wr-tools">
-      <div class="wr-line wr-model-line"></div>
-      <div class="wr-line"><input class="wr-ask" placeholder="Ask for a change… (e.g. more formal, shorter, British spelling)" value=""><button class="small primary wr-go" title="Rewrite the selection or this paragraph">${ic("sparkles")}<span>Rewrite</span></button></div>
-      <div class="wr-line wr-skills"></div>
-      <div class="wr-line"><button class="small wr-check-p">${ic("search")}<span>Check paragraph</span></button><button class="small wr-check-d">${ic("list-checks")}<span>Check document</span></button><span class="tb-spacer"></span><label class="switch wr-auto" title="Check the paragraph you were writing after a short pause (uses the AI model)"><span>As I type</span><input type="checkbox"${settings.writeAuto ? " checked" : ""}><span class="knob"></span></label></div>
-    </div>`;
-  el.querySelector(".wr-model-line").appendChild(await modelControls("write", "writeEffort", "writeThinking"));
-  // writing guides (skills) to follow
-  const sk = el.querySelector(".wr-skills");
-  const list = m.skills();
-  if (list.length) {
-    sk.innerHTML = `<span class="note">Guides:</span>`;
-    const on = new Set(settings.writeSkills || []);
-    for (const s of list.slice(0, 12)) {
-      const b = document.createElement("button");
-      b.className = "chip" + (on.has(s.name) ? " on" : "");
-      b.textContent = s.name;
-      b.title = on.has(s.name) ? "Followed — click to stop" : "Click to follow this guide";
-      b.onclick = () => { on.has(s.name) ? on.delete(s.name) : on.add(s.name); updateSettings({ writeSkills: [...on] }); b.classList.toggle("on"); checked.clear(); };
-      sk.appendChild(b);
-    }
-  } else sk.remove();
-  if (issue) {
-    el.querySelector(".wr-why").textContent = issue.why;
-    el.querySelector(".wr-from s").textContent = issue.quote;
-    const fx = el.querySelector(".wr-fixes");
-    for (const f of issue.fixes) {
-      const b = document.createElement("button");
-      b.className = "wr-fix";
-      b.textContent = f || "(remove)";
-      b.onclick = () => { apply(issue, f); nextIssue(issue, 1, true); };
-      fx.appendChild(b);
-    }
-    el.querySelector(".wr-ignore").onclick = () => { ignored.add(issue.quote + "|" + issue.why); removeIssue(issue); nextIssue(issue, 1, true); };
-    el.querySelector(".wr-all").onclick = () => { const all = issuesOf().filter((i) => i.kind === issue.kind && i.fixes.length).sort((a, b) => b.from - a.from); for (const i of all) apply(i, i.fixes[0]); status(`Applied ${all.length} suggestion${all.length === 1 ? "" : "s"}`, "ok"); closeCard(); };
-    el.querySelector(".wr-prev").onclick = () => nextIssue(issue, -1);
-    el.querySelector(".wr-next").onclick = () => nextIssue(issue, 1);
+  const body = document.createElement("div");
+  issueBody(body, s, { inCard: true });
+  el.appendChild(body);
+  if (!UI.panel) {
+    const b = document.createElement("button");
+    b.className = "small wr-openpanel"; b.textContent = "Open the writing panel";
+    b.onclick = () => { closeCard(); UI.panel = true; refreshAll(); };
+    el.appendChild(b);
   }
-  el.querySelector(".wr-x").onclick = closeCard;
-  el.querySelector(".wr-check-p").onclick = () => { const v = getView(); const h = v.state.selection.main; const [p] = paragraphsIn(v.state.doc, h.from, h.to); closeCard(); if (p) checkWriting({ from: p.from, to: p.to }); };
-  el.querySelector(".wr-check-d").onclick = () => { closeCard(); checkWriting(); };
-  el.querySelector(".wr-auto input").onchange = (e) => updateSettings({ writeAuto: e.target.checked });
-  const ask = el.querySelector(".wr-ask");
-  const go = async () => {
-    const instr = ask.value.trim();
-    if (!instr) return ask.focus();
-    const v = getView();
-    let { from, to } = v.state.selection.main;
-    if (from === to) { const [p] = paragraphsIn(v.state.doc, from, from); if (p) { from = p.from; to = p.to; v.dispatch({ selection: { anchor: from, head: to } }); } }
-    closeCard();
-    const g = await guidesText();
-    (await ai()).runAction("custom", instr + (g ? `\n\nFollow these writing guides:\n${g}` : ""));
-  };
-  el.querySelector(".wr-go").onclick = go;
-  ask.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } };
-  place(el, at);
-  card = { el, issue };
-  document.addEventListener("pointerdown", awayCard, true);
-  document.addEventListener("keydown", escCard, true);
+  document.body.appendChild(el);
+  const w = el.offsetWidth, h = el.offsetHeight;
+  let x = at.x, y = at.y;
+  if (x + w > innerWidth - 10) x = innerWidth - w - 10;
+  if (y + h > innerHeight - 10) y = Math.max(10, at.y - h - 34);
+  el.style.left = Math.max(10, x) + "px"; el.style.top = y + "px";
+  card = { el, key: s.issue.original + s.unit };
 }
 
-function apply(issue, text) {
-  const v = getView();
-  if (!v) return;
-  const cur = issuesOf(v).find((i) => i.quote === issue.quote && i.why === issue.why && Math.abs(i.from - issue.from) < 4) || issue;
-  if (v.state.sliceDoc(cur.from, cur.to) !== issue.quote) return;
-  v.dispatch({ changes: { from: cur.from, to: cur.to, insert: text }, userEvent: "input.ai", effects: setIssues.of((l) => l.filter((i) => i !== cur)) });
-  updateBadge();
-}
-function removeIssue(issue) { const v = getView(); v?.dispatch({ effects: setIssues.of((l) => l.filter((i) => i !== issue)) }); updateBadge(); }
-function nextIssue(from, dir, afterChange = false) {
-  const v = getView();
-  const list = [...issuesOf(v)].sort((a, b) => a.from - b.from);
-  if (!list.length) { closeCard(); return; }
-  let i = list.findIndex((x) => (dir > 0 ? x.from >= from.from + (afterChange ? 0 : 1) : x.from < from.from));
-  if (dir < 0) i = list.map((x) => x.from < from.from).lastIndexOf(true);
-  const next = list[(i + list.length) % list.length] || list[0];
-  v.dispatch({ effects: EditorView.scrollIntoView(next.from, { y: "center" }) });
-  requestAnimationFrame(() => {
-    const c = v.coordsAtPos(next.from);
-    if (c) openCard({ x: c.left, y: c.top }, next);
-  });
-}
-
-/** The panel at the caret (Ctrl+Alt+G or the toolbar button). */
-export function openPanelAtCaret() {
-  const v = getView();
-  const c = v?.coordsAtPos(v.state.selection.main.head);
-  openCard(c ? { x: c.left, y: c.top } : { x: innerWidth / 2 - 180, y: 120 });
-}
-
-// ---------------- translate ----------------
-const LANGS = [["vi", "Vietnamese"], ["en", "English"], ["zh-CN", "Chinese (Simplified)"], ["zh-TW", "Chinese (Traditional)"], ["ja", "Japanese"], ["ko", "Korean"], ["fr", "French"], ["de", "German"], ["es", "Spanish"], ["pt", "Portuguese"], ["ru", "Russian"], ["it", "Italian"], ["th", "Thai"], ["id", "Indonesian"], ["ar", "Arabic"], ["hi", "Hindi"]];
-const langName = (c) => LANGS.find((l) => l[0] === c)?.[1] || c;
-
-export async function translateSelection(to, at) {
-  const v = getView();
-  if (!v) return;
-  const { from, to: end } = v.state.selection.main;
-  const text = v.state.sliceDoc(from, end);
-  if (!text.trim()) return toast("Select the text to translate first.", "", 2500);
-  const c = v.coordsAtPos(end);
-  return translateText(text, {
-    to, at: at || (c ? { x: c.left, y: c.bottom } : null),
-    replace: (result) => { const cv = getView(); if (cv.state.sliceDoc(from, end) === text) cv.dispatch({ changes: { from, to: end, insert: result }, userEvent: "input.translate" }); },
-    insert: (result) => { const cv = getView(); const line = cv.state.doc.lineAt(end); cv.dispatch({ changes: { from: line.to, insert: "\n\n" + result }, userEvent: "input.translate" }); },
-  });
-}
-
-/** Translate `text` in a card at `at`; replace/insert are offered when given. */
-export async function translateText(text, { to, at, replace, insert } = {}) {
+// ---------------------------------------------------------------- act
+async function accept(s) {
+  if (!W) return;
+  const u = W.units[s.unit];
+  if (!u) return;
   closeCard();
-  const el = document.createElement("div");
-  el.className = "wr-card tr-card";
-  el.innerHTML = `
-    <div class="wr-head">${ic("globe")}<b>Translate</b><span class="tb-spacer"></span><button class="icon small wr-x" title="Close (Esc)">${ic("x")}</button></div>
-    <div class="wr-line"><select class="tr-to" title="Translate into">${LANGS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("")}</select></div>
-    <div class="wr-line wr-model-line"></div>
-    <div class="tr-out" aria-live="polite"></div>
-    <div class="wr-row"><button class="small primary tr-rep">${ic("check")}<span>Replace</span></button><button class="small tr-ins">${ic("plus")}<span>Insert below</span></button><button class="small tr-copy">${ic("copy")}<span>Copy</span></button><span class="tb-spacer"></span><span class="note tr-from"></span></div>`;
-  el.querySelector(".wr-model-line").appendChild(await modelControls("translate", "translateEffort", "translateThinking"));
-  const toSel = el.querySelector(".tr-to");
-  toSel.value = to || settings.translateTo || "vi";
-  const out = el.querySelector(".tr-out");
-  let result = "", seq = 0;
-  const run = async () => {
-    const my = ++seq;
-    const target = toSel.value;
-    updateSettings({ translateTo: target });
-    out.innerHTML = `<div class="tr-wait"><span class="ld-spin"><span></span><span></span><span></span></span>Translating into ${langName(target)}…</div>`;
-    el.querySelectorAll(".wr-row button").forEach((b) => (b.disabled = true));
-    const engine = settings.aiModel_translate || "google";
-    try {
-      if (engine === "google") {
-        const r = await call("translate_google", { text, to: target, from: null });
-        if (my !== seq) return;
-        result = r?.text || "";
-        el.querySelector(".tr-from").textContent = r?.from ? `from ${langName(r.from)} · Google` : "Google Translate";
-      } else {
-        const m = await ai();
-        result = "";
-        const r = await m.runAI("translate", { model: engine, system: `Translate the user's text into ${langName(target)}. Keep the meaning, tone, formatting, line breaks, Markdown/LaTeX markup, citations and math exactly. Reply with ONLY the translation.`, messages: [{ role: "user", content: text }], temperature: 0.2, effort: settings.translateEffort || null, thinking: !!settings.translateThinking }, (e) => { if (e.kind === "text" && my === seq) { result += e.text; out.textContent = result; } });
-        if (my !== seq) return;
-        result = String(r || result).replace(/^```[a-z]*\n|\n```$/g, "");
-        el.querySelector(".tr-from").textContent = engine.split("|").pop();
-      }
-      out.textContent = result;
-      el.querySelectorAll(".wr-row button").forEach((b) => (b.disabled = false));
-    } catch (e) {
-      if (my !== seq) return;
-      out.innerHTML = `<div class="tr-err"></div>`;
-      out.firstChild.textContent = `Couldn't translate: ${e.message === "NO_MODEL" ? "set up an AI model first" : e.message || e}`;
-    }
-  };
-  toSel.onchange = run;
-  el.querySelector(".wr-model").addEventListener("change", run);
-  el.querySelector(".wr-x").onclick = closeCard;
-  const rep = el.querySelector(".tr-rep"), ins = el.querySelector(".tr-ins");
-  if (replace) rep.onclick = () => { replace(result); status("Replaced with the translation", "ok"); closeCard(); }; else rep.remove();
-  if (insert) ins.onclick = () => { insert(result); status("Translation inserted", "ok"); closeCard(); }; else ins.remove();
-  el.querySelector(".tr-copy").onclick = () => navigator.clipboard.writeText(result).then(() => status("Translation copied", "ok"));
-  if (!replace) el.querySelector(".tr-copy").classList.add("primary");
-  place(el, at || { x: innerWidth / 2 - 200, y: 140 });
-  card = { el, issue: null };
-  document.addEventListener("pointerdown", awayCard, true);
-  document.addEventListener("keydown", escCard, true);
-  run();
+  try {
+    W.carry = { hash: u.hash, accepted: s.issue.original, keyJson: JSON.stringify(u.key) };
+    await HOSTS[kind].apply(u, s.issue.original, s.issue.replacement);
+    const c = cfg(); const i = CATS.findIndex((x) => x.id === s.issue.cat);
+    const stats = { ...c.stats, accepted: [...c.stats.accepted], weeks: { ...c.stats.weeks } };
+    stats.accepted[i]++; stats.weeks[weekKey()] = (stats.weeks[weekKey()] || 0) + 1;
+    UI.acceptedNow[i]++;
+    saveCfg({ stats });
+    scheduleCollect(60);
+  } catch (e) { W.carry = null; status(`Couldn't apply the suggestion: ${e.message || e}`, "err"); }
+}
+function dismiss(s) {
+  const u = W?.units[s.unit]; if (!u) return;
+  W.dismissed.add(u.hash + "|" + s.issue.original);
+  const c = cfg(); saveCfg({ stats: { ...c.stats, dismissed: c.stats.dismissed + 1 } });
+  closeCard(); refreshAll();
+}
+function learn(word) {
+  const w = word.trim(); const c = cfg();
+  if (w && !c.dictionary.some((d) => d.toLowerCase() === w.toLowerCase())) { saveCfg({ dictionary: [...c.dictionary, w] }); status(`“${w}” added to your dictionary`, "ok"); }
+  closeCard(); refreshAll();
 }
 
-// ---------------- right-click in the editor ----------------
-function editorMenu(e, v) {
-  const sel = v.state.selection.main;
-  const has = sel.to > sel.from;
-  const t = activeTab();
-  const pos = v.posAtCoords({ x: e.clientX, y: e.clientY });
-  const it = pos != null && issueAt(v, pos);
-  const at = { x: e.clientX, y: e.clientY };
-  const items = [];
-  if (it) {
-    items.push({ header: KINDS[it.kind] || "Suggestion" });
-    for (const f of it.fixes.slice(0, 3)) items.push({ label: f || "(remove)", icon: "check", action: () => apply(it, f) });
-    items.push({ label: "Ignore", icon: "eye-off", action: () => { ignored.add(it.quote + "|" + it.why); removeIssue(it); } }, "-");
+// ---------------------------------------------------------------- the round button
+let btn = null;
+function refreshButton() {
+  const k = hostKind();
+  const on = !!k && cfg().enabled && !UI.panel;
+  if (!btn) {
+    btn = document.createElement("button");
+    btn.className = "wr-btn";
+    btn.title = "Writing assistant (Ctrl+Alt+G checks the document)";
+    btn.onclick = () => { UI.panel = true; if (W && !W.units.some((u) => W.checked.has(u.hash)) && !W.job) checkNow(); refreshAll(); };
+    document.body.appendChild(btn);
   }
-  items.push(
-    { label: "Cut", key: "Ctrl+X", icon: "minify", disabled: !has, action: () => { navigator.clipboard.writeText(v.state.sliceDoc(sel.from, sel.to)); v.dispatch({ changes: { from: sel.from, to: sel.to, insert: "" }, userEvent: "delete.cut" }); } },
-    { label: "Copy", key: "Ctrl+C", icon: "copy", disabled: !has, action: () => navigator.clipboard.writeText(v.state.sliceDoc(sel.from, sel.to)) },
-    { label: "Paste", key: "Ctrl+V", icon: "file-text", action: async () => { const txt = await navigator.clipboard.readText().catch(() => ""); if (txt) v.dispatch(v.state.replaceSelection(txt)); } },
-    "-",
-    { label: "Translate", icon: "globe", disabled: !has, sub: [
-      { label: `Into ${langName(settings.translateTo || "vi")}`, key: "Ctrl+Alt+T", action: () => translateSelection(settings.translateTo || "vi", at) },
-      "-",
-      ...LANGS.filter(([c]) => c !== (settings.translateTo || "vi")).slice(0, 10).map(([c, n]) => ({ label: n, action: () => translateSelection(c, at) })),
-    ] },
-  );
-  if (t && TEXT_KINDS.has(t.kind)) {
-    items.push(
-      { label: "Writing suggestions…", key: "Ctrl+Alt+G", icon: "wand", action: () => openCard(at) },
-      { label: "Check this paragraph", icon: "search", action: () => { const [p] = paragraphsIn(v.state.doc, sel.from, sel.to); if (p) checkWriting({ from: p.from, to: p.to }); } },
-    );
-    items.push({ label: "AI", icon: "sparkles", disabled: !has, sub: [] });
-    ai().then(() => {}); // warm up
+  btn.hidden = !on;
+  if (!on) return;
+  // bottom right of the document area
+  const sel = { word: "#word-view", deck: "#deck-view", sheet: "#sheet-view, #xlsx-view", text: "#editor-pane" }[k];
+  const area = [...document.querySelectorAll(sel)].find((x) => x.offsetWidth > 0) || document.querySelector("#main") || document.body;
+  const r = area.getBoundingClientRect();
+  const lift = k === "sheet" ? 92 : 46;
+  btn.style.left = Math.round(Math.min(innerWidth, r.right) - 40 - 26) + "px";
+  btn.style.top = Math.round(Math.min(innerHeight, r.bottom) - 40 - lift) + "px";
+  const shown = visible();
+  const worst = CATS.find((c) => shown.some((s) => s.issue.cat === c.id));
+  btn.style.setProperty("--ring", worst ? worst.color : "var(--gold, #ddb04e)");
+  btn.classList.toggle("busy", !!W?.job);
+  btn.innerHTML = shown.length ? `<span>${Math.min(99, shown.length)}</span>` : ic("sparkles");
+}
+addEventListener("resize", () => refreshButton());
+
+// ---------------------------------------------------------------- the panel
+let panel = null;
+function refreshAll() { refreshButton(); drawMarks(); refreshPanel(); updateFmtBadge(); }
+function updateFmtBadge() {
+  const b = document.querySelector("#btn-write .wr-count");
+  const n = W ? visible().length : 0;
+  if (b) { b.textContent = n || ""; b.hidden = !n; }
+}
+function refreshPanel() {
+  if (!UI.panel || !hostKind()) { if (panel) { panel.classList.remove("open"); const p = panel; setTimeout(() => { if (!UI.panel) p.hidden = true; }, 200); } return; }
+  if (!panel) {
+    panel = document.createElement("aside");
+    panel.className = "wr-panel";
+    panel.setAttribute("aria-label", "Writing assistant");
+    document.body.appendChild(panel);
   }
-  items.push("-", { label: "Select All", key: "Ctrl+A", action: () => v.dispatch({ selection: { anchor: 0, head: v.state.doc.length } }) });
-  // the AI rewrite actions (filled in once ai.js is loaded)
-  const aiItem = items.find((x) => x && x.label === "AI");
-  if (aiItem) {
-    import("./ai.js").then((m) => {
-      aiItem.sub = m.ACTIONS.filter((a) => !a.chat).map((a) => ({ label: a.label + (a.id === "custom" ? "" : ""), action: () => m.runAction(a.id) }));
-      showContextMenu(e, items);
-    });
+  panel.hidden = false;
+  requestAnimationFrame(() => panel.classList.add("open"));
+  const shown = visible();
+  const sc = score(shown);
+  const checkedN = W ? W.units.filter((u) => W.checked.has(u.hash)).length : 0;
+  const keepScroll = panel.querySelector(".wr-tabbody")?.scrollTop || 0;
+  const focusPrompt = document.activeElement?.classList.contains("wr-prompt");
+  const ring = (() => {
+    if (sc == null) return `<svg viewBox="0 0 52 52" class="wr-ring"><circle cx="26" cy="26" r="22" class="bg"/><text x="26" y="31">—</text></svg>`;
+    const f = sc / 100, col = sc >= 85 ? "#2bb86a" : sc >= 60 ? "var(--gold, #ddb04e)" : "#f03c45";
+    const L = 2 * Math.PI * 22;
+    return `<svg viewBox="0 0 52 52" class="wr-ring"><circle cx="26" cy="26" r="22" class="bg"/><circle cx="26" cy="26" r="22" class="fg" style="stroke:${col};stroke-dasharray:${L * f} ${L}"/><text x="26" y="31">${sc}</text></svg>`;
+  })();
+  panel.innerHTML = `
+    <div class="wr-ph"><b>Writing assistant</b><span class="tb-spacer"></span><button class="icon small wr-close" title="Close">${ic("x")}</button></div>
+    <div class="wr-top">
+      <div class="wr-scorerow">${ring}<div class="wr-sc-t"><b>Overall score</b><span class="note">${shown.length} suggestion${shown.length === 1 ? "" : "s"} · ${checkedN} of ${W?.units.length || 0} checked</span></div><span class="tb-spacer"></span>${W?.job ? `<span class="wr-spin"></span><button class="small wr-stop">Stop</button>` : `<button class="small primary wr-check">Check now</button>`}</div>
+      <div class="wr-model-line"></div>
+      <div class="wr-tiles">${CATS.map((c) => { const n = shown.filter((s) => s.issue.cat === c.id).length; return `<button class="wr-tile${UI.filter === c.id ? " on" : ""}" data-c="${c.id}" style="--c:${c.color}" title="Show only ${c.label}"><b style="${n ? `color:${c.color}` : ""}">${n}</b><span>${c.label}</span></button>`; }).join("")}</div>
+      ${W?.tone ? `<div class="wr-tone" style="color:${W.tone.fits ? "#2bb86a" : "#8b5cf6"}">Tone: ${esc(W.tone.tone)} — ${W.tone.fits ? "fits your goals" : "doesn't quite fit your goals"}</div>` : ""}
+      <div class="wr-tabs">${[["suggestions", "Suggestions"], ["goals", "Goals"], ["write", "Write"], ["report", "Report"], ["originality", "Originality"]].map(([id, l]) => `<button data-t="${id}" class="${UI.tab === id ? "on" : ""}">${l}</button>`).join("")}</div>
+    </div>
+    <div class="wr-tabbody"></div>`;
+  panel.querySelector(".wr-close").onclick = () => { UI.panel = false; refreshAll(); };
+  panel.querySelector(".wr-check")?.addEventListener("click", () => { if (W) { W.wanted = true; W.error = null; maybeCheck(); } });
+  panel.querySelector(".wr-stop")?.addEventListener("click", async () => { if (!W?.job) return; const id = W.job.idRef?.id; W.units.forEach((u) => W.pending.delete(u.hash)); W.job = null; W.wanted = false; if (id) (await ai()).cancelAI(id).catch(() => {}); refreshAll(); });
+  panel.querySelectorAll(".wr-tile").forEach((b) => (b.onclick = () => { UI.filter = UI.filter === b.dataset.c ? null : b.dataset.c; UI.tab = "suggestions"; refreshPanel(); }));
+  panel.querySelectorAll(".wr-tabs button").forEach((b) => (b.onclick = () => { UI.tab = b.dataset.t; refreshPanel(); }));
+  modelControls({ value: writeModel(), effort: settings.writeEffort, thinking: !!settings.writeThinking, onModel: (v) => { updateSettings({ aiModel_write: v }); }, onEffort: (v) => updateSettings({ writeEffort: v }), onThinking: (v) => updateSettings({ writeThinking: v }) }).then((c) => panel.querySelector(".wr-model-line")?.appendChild(c));
+  const body = panel.querySelector(".wr-tabbody");
+  if (UI.tab === "suggestions") suggestionsTab(body, shown);
+  else if (UI.tab === "goals") goalsTab(body);
+  else if (UI.tab === "write") writeTab(body);
+  else if (UI.tab === "report") reportTab(body, shown, sc);
+  else originalityTab(body);
+  body.scrollTop = keepScroll;
+  if (focusPrompt) panel.querySelector(".wr-prompt")?.focus();
+}
+
+function suggestionsTab(body, shown) {
+  if (W?.error) body.insertAdjacentHTML("beforeend", `<div class="wr-err">${esc(W.error)}</div>`);
+  const list = shown.filter((s) => !UI.filter || s.issue.cat === UI.filter);
+  if (!list.length) {
+    const all = W && W.units.length && W.units.every((u) => W.checked.has(u.hash));
+    const msg = W?.job ? "Checking your writing…" : all ? "No suggestions — your writing looks great." : !W?.units.length ? "Start writing, and suggestions show up here." : "Press Check now, or turn on Check as you type (Goals).";
+    body.insertAdjacentHTML("beforeend", `<div class="wr-empty">${all && !W?.job ? ic("check-circle") : ic("sparkles")}<span>${msg}</span></div>`);
     return;
   }
-  showContextMenu(e, items);
+  for (const s of list.slice(0, 300)) {
+    const u = W.units[s.unit];
+    const id = u.hash + "|" + s.issue.original;
+    const open = UI.expanded === id;
+    const c = cat(s.issue.cat);
+    const el = document.createElement("div");
+    el.className = "wr-item" + (open ? " open" : "");
+    el.style.setProperty("--c", c.color);
+    if (open) issueBody(el, s, { inCard: false });
+    else {
+      el.innerHTML = `<div class="wr-line1"><span class="wr-dot" style="--c:${c.color}"></span><s>${esc(preview(s.issue.original, 26))}</s><span class="note">→</span><b>${esc(s.issue.replacement ? preview(s.issue.replacement, 30) : "∅")}</b></div><div class="note">${esc(s.issue.title || s.issue.kind)}</div>`;
+      el.onclick = () => { UI.expanded = id; HOSTS[kind]?.focus(u, s.issue.original).catch?.(() => {}); refreshPanel(); };
+    }
+    body.appendChild(el);
+  }
 }
 
-// keyboard
-document.addEventListener("keydown", (e) => {
-  if (!(e.ctrlKey || e.metaKey) || !e.altKey) return;
-  const k = e.key.toLowerCase();
-  const t = activeTab();
-  if (!t || !getView()?.hasFocus) return;
-  if (k === "g" && TEXT_KINDS.has(t.kind)) { e.preventDefault(); openPanelAtCaret(); }
-  if (k === "t") { e.preventDefault(); translateSelection(settings.translateTo || "vi"); }
-}, true);
+function goalsTab(body) {
+  const c = cfg();
+  const g = c.goals;
+  const group = (label, key, opts) => `<div class="wr-g"><b>${label}</b><div class="wr-chips">${opts.map((o) => `<button class="chip${g[key] === o ? " on" : ""}" data-k="${key}" data-v="${esc(o)}">${o}</button>`).join("")}</div></div>`;
+  body.innerHTML = `<p class="note">Set goals to get suggestions that fit what you're writing.</p>
+    ${group("Domain", "domain", DOMAINS)}${group("Formality", "formality", FORMALITY)}${group("Audience", "audience", AUDIENCE)}${group("Intent", "intent", INTENT)}
+    <div class="wr-g"><b>Language variety</b><select class="wr-variant">${VARIANTS.map(([v, l]) => `<option value="${v}"${g.variant === v ? " selected" : ""}>${l}</option>`).join("")}</select></div>
+    <div class="wr-g"><label class="check"><input type="checkbox" class="wr-auto"${c.auto ? " checked" : ""}> Check as you type <span class="note">(after a pause; every check is a request to your AI provider)</span></label>
+      <label class="wr-delay">Pause before checking <input type="number" min="0.6" max="10" step="0.1" value="${(c.delay / 1000).toFixed(1)}"> s</label>
+      <label>Double-click a word <select class="wr-dbl"><option value="translate">Translate it</option><option value="meaning">Look up its meaning</option><option value="off">Nothing</option></select></label></div>
+    <div class="wr-g"><b>Personal dictionary</b><p class="note">Words here are never flagged. Add them from a suggestion card.</p><div class="wr-chips">${c.dictionary.map((w, i) => `<button class="chip wr-dw" data-i="${i}" title="Remove">${esc(w)} ×</button>`).join("") || `<span class="note">(empty)</span>`}</div></div>`;
+  body.querySelector(".wr-dbl").value = c.dblclick;
+  body.querySelectorAll("[data-k]").forEach((b) => (b.onclick = () => {
+    saveCfg({ goals: { ...g, [b.dataset.k]: b.dataset.v } });
+    rehash();
+  }));
+  body.querySelector(".wr-variant").onchange = (e) => { saveCfg({ goals: { ...g, variant: e.target.value } }); rehash(); };
+  body.querySelector(".wr-auto").onchange = (e) => { saveCfg({ auto: e.target.checked }); if (e.target.checked) maybeCheck(); };
+  body.querySelector(".wr-delay input").onchange = (e) => saveCfg({ delay: Math.round(Math.max(0.6, +e.target.value || 1.5) * 1000) });
+  body.querySelector(".wr-dbl").onchange = (e) => saveCfg({ dblclick: e.target.value });
+  body.querySelectorAll(".wr-dw").forEach((b) => (b.onclick = () => { const d = [...c.dictionary]; d.splice(+b.dataset.i, 1); saveCfg({ dictionary: d }); refreshAll(); }));
+}
+/** New goals: everything is checked again against them. */
+function rehash() { if (W) { W.units = []; W.wanted = true; } collect(); }
 
-// right-click on selected text elsewhere (the preview, PDF text, the chat…): Copy and Translate
-document.addEventListener("contextmenu", (e) => {
-  if (e.defaultPrevented || e.target.closest?.(".cm-editor, input, textarea, select, .tree-item, .tab, [contenteditable=true]")) return;
-  const text = String(getSelection() || "").trim();
-  if (!text) return;
-  const at = { x: e.clientX, y: e.clientY };
-  const cur = settings.translateTo || "vi";
-  showContextMenu(e, [
-    { label: "Copy", key: "Ctrl+C", icon: "copy", action: () => navigator.clipboard.writeText(text).then(() => status("Copied", "ok")) },
-    { label: "Translate", icon: "globe", sub: [
-      { label: `Into ${langName(cur)}`, action: () => translateText(text, { to: cur, at }) },
+function writeTab(body) {
+  body.innerHTML = `<p class="note">Compose, rewrite or brainstorm with AI. Works on the selection (or the paragraph at the cursor).</p>
+    <div class="wr-chips">${[["More formal", "Rewrite it in a more formal, professional tone."], ["Friendlier", "Rewrite it in a warmer, friendlier tone."], ["Concise", "Make it more concise without losing meaning."], ["Expand", "Expand it with more detail and supporting points."], ["Simplify", "Rewrite it in simpler words and shorter sentences."], ["Improve it", "Improve its clarity, flow and word choice."], ["Ideas", "Brainstorm 8 ideas, angles or titles related to it, as a list."], ["Summarise", "Summarise it in a few sentences."]].map(([l, i]) => `<button class="chip" data-i="${esc(i)}">${l}</button>`).join("")}</div>
+    <textarea class="wr-prompt" rows="3" placeholder="Or tell AI what to write, e.g. Write an email asking for a deadline extension…"></textarea>
+    <div class="wr-row">${UI.goBusy ? `<span class="wr-spin"></span><span>Writing…</span>` : `<button class="small primary wr-gen">${ic("sparkles")}<span>Generate</span></button>`}</div>
+    ${UI.goError ? `<div class="wr-err">${esc(UI.goError)}</div>` : ""}
+    ${UI.goResult != null ? `<div class="wr-result"></div><div class="wr-row"><button class="small wr-ins">${ic("plus")}<span>Insert</span></button><button class="small wr-rep">${ic("check")}<span>Replace selection</span></button><button class="small wr-cp">${ic("copy")}<span>Copy</span></button></div>` : ""}`;
+  const pr = body.querySelector(".wr-prompt");
+  pr.value = UI.prompt;
+  pr.oninput = () => (UI.prompt = pr.value);
+  pr.onkeydown = (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); generate(pr.value.trim()); } };
+  body.querySelectorAll(".chip[data-i]").forEach((b) => (b.onclick = () => generate(b.dataset.i)));
+  body.querySelector(".wr-gen")?.addEventListener("click", () => generate(pr.value.trim()));
+  if (UI.goResult != null) {
+    body.querySelector(".wr-result").textContent = UI.goResult;
+    body.querySelector(".wr-ins").onclick = async () => { try { await HOSTS[kind].insert(UI.goResult); status("Text inserted", "ok"); } catch (e) { status(e.message || String(e), "err"); } };
+    body.querySelector(".wr-rep").onclick = async () => { try { const t = await HOSTS[kind].target(); if (!t) throw new Error("Select the text to replace."); await HOSTS[kind].replace(t, UI.goResult); status("Text replaced", "ok"); } catch (e) { status(e.message || String(e), "err"); } };
+    body.querySelector(".wr-cp").onclick = () => navigator.clipboard.writeText(UI.goResult).then(() => status("Copied to the clipboard", "ok"));
+  }
+}
+async function generate(instruction) {
+  if (!instruction || UI.goBusy) return;
+  const m = await ai();
+  const model = writeModel() || m.modelFor("edit");
+  if (!model) { UI.goError = "Sign in to an AI provider in Settings › AI first."; refreshPanel(); return; }
+  const target = (await HOSTS[kind]?.target().catch(() => null))?.text || "";
+  const g = cfg().goals;
+  let system = `You are a skilled writing assistant inside a document editor (like GrammarlyGO). Do what the user asks. Reply with the resulting text only — no preamble, no quotes, no explanation. Keep the text's language unless asked otherwise.\nWriting goals: domain ${g.domain}, formality ${g.formality}, audience ${g.audience}, intent ${g.intent}.`;
+  if (settings.aiInstructions?.trim()) system += `\n\nThe author's standing instructions:\n${settings.aiInstructions.trim()}`;
+  const prompt = target.trim() ? `${instruction}\n\nText:\n<<<\n${target}\n>>>` : instruction;
+  UI.goBusy = true; UI.goError = null; UI.goResult = null; refreshPanel();
+  try { UI.goResult = String(await m.runAI("write", { model, system, messages: [{ role: "user", content: prompt }], effort: settings.writeEffort || null, thinking: !!settings.writeThinking })).trim(); }
+  catch (e) { UI.goError = e.message === "NO_MODEL" ? "Sign in to an AI provider in Settings › AI first." : e.message || String(e); }
+  finally { UI.goBusy = false; refreshPanel(); }
+}
+
+const STOP = new Set("the a an and or of to in on for is are was were be it this that with as at by i we you he she they not but from have has will can và là của các những một cho với trong được có không này đã để khi thì về người như từ đến cũng".split(" "));
+function reportTab(body, shown, sc) {
+  const text = (W?.units || []).map((u) => u.text).join("\n");
+  const list = (text.toLowerCase().match(/[\p{L}\p{N}']+/gu) || []);
+  const n = list.length;
+  const sentences = Math.max(1, text.split(/[.!?\n]/).filter((x) => x.trim().split(/\s+/).filter(Boolean).length).length);
+  const uniq = new Set(list).size;
+  const c = cfg();
+  const freq = new Map();
+  for (const w of list) if ([...w].length > 2 && !STOP.has(w) && !/^\d+$/.test(w)) freq.set(w, (freq.get(w) || 0) + 1);
+  const top = [...freq].filter(([, k]) => k > 1).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 10);
+  const thisWeek = c.stats.weeks[weekKey()] || 0;
+  const total = c.stats.accepted.reduce((a, b) => a + b, 0);
+  const weeks = Object.entries(c.stats.weeks).sort().slice(-8);
+  const max = Math.max(1, ...weeks.map(([, v]) => v));
+  body.innerHTML = `<b>This document</b>
+    <table class="wr-rep">${[["Overall score", sc ?? "—"], ["Words", n], ["Sentences", sentences], ["Average sentence length", (n / sentences).toFixed(1)], ["Reading time", `${Math.max(1, Math.ceil(n / 230))} min`], ["Unique words", `${n ? Math.round((uniq * 100) / n) : 0}%`]].map(([k, v]) => `<tr><td>${k}</td><td><b>${v}</b></td></tr>`).join("")}
+    ${CATS.map((x) => `<tr><td>${x.label}</td><td style="color:${x.color}"><b>${shown.filter((s) => s.issue.cat === x.id).length}</b></td></tr>`).join("")}</table>
+    ${top.length ? `<b>Most used words</b><p>${top.map(([w, k]) => `${esc(w)} (${k})`).join(", ")}</p>` : ""}
+    <b>Your progress</b><p>${thisWeek} suggestions accepted this week, ${total} in all</p>
+    <p class="note">${CATS.map((x, i) => `${x.label}: ${c.stats.accepted[i] || 0}`).join(" · ")} · ${c.stats.dismissed} dismissed</p>
+    ${weeks.length > 1 ? `<div class="wr-weeks">${weeks.map(([w, v]) => `<div><span class="note">${w}</span><i style="width:${Math.max(2, (160 * v) / max)}px"></i><span>${v}</span></div>`).join("")}</div>` : ""}`;
+}
+
+function originalityTab(body) {
+  body.innerHTML = `<p class="note">Searches the web for passages of this document that appear elsewhere (each distinctive sentence is searched, in quotes, with the search engine picked in the AI chat — Google unless you chose another web engine).</p>
+    <div class="wr-row">${UI.origBusy ? `<span class="wr-spin"></span><span>Searching the web… ${UI.origBusy}</span>` : `<button class="small primary wr-orig-go"${W?.units.length ? "" : " disabled"}>${ic("search")}<span>Check originality</span></button>`}</div>
+    ${UI.origError ? `<div class="wr-err">${esc(UI.origError)}</div>` : ""}<div class="wr-orig-res"></div>`;
+  body.querySelector(".wr-orig-go")?.addEventListener("click", originality);
+  if (UI.orig) {
+    const r = UI.orig;
+    const box = body.querySelector(".wr-orig-res");
+    box.innerHTML = `<div class="wr-pct" style="color:${r.pct >= 90 ? "#2bb86a" : "#f03c45"}">${r.pct}% original</div><p class="note">${r.checked} sentence${r.checked === 1 ? "" : "s"} searched</p>`;
+    if (!r.matches.length) box.insertAdjacentHTML("beforeend", "<p>No matching text found online.</p>");
+    for (const m of r.matches) {
+      const d = document.createElement("div"); d.className = "wr-item";
+      d.innerHTML = `<i>“${esc(m.quote)}”</i><a href="#" class="wr-link"></a>`;
+      const a = d.querySelector("a"); a.textContent = m.title || m.url; a.title = m.url;
+      a.onclick = (e) => { e.preventDefault(); call("open_url", { url: m.url }).catch(() => window.open(m.url)); };
+      box.appendChild(d);
+    }
+  }
+}
+async function originality() {
+  if (!W || UI.origBusy) return;
+  const text = W.units.map((u) => u.text).join("\n");
+  const sentences = [...new Set(text.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter((s) => s.split(/\s+/).length >= 10))].sort((a, b) => b.length - a.length).slice(0, 8);
+  if (!sentences.length) { UI.origError = "There are no sentences long enough to search."; refreshPanel(); return; }
+  const e0 = settings.aiSearchEngine;
+  const engine = e0 && !["auto", "scholar", "semantic", "openalex", "arxiv", "pubmed", "europepmc", "crossref", "dblp"].includes(e0) ? e0 : "google";
+  const norm = (s) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  UI.origError = null; UI.orig = null;
+  const matches = [];
+  let found = 0;
+  for (let i = 0; i < sentences.length; i++) {
+    UI.origBusy = `${i + 1} of ${sentences.length}`; refreshPanel();
+    const s = sentences[i];
+    const q = s.split(/\s+/).slice(0, 24).join(" ");
+    let hits = [];
+    try { hits = await call("web_search_engine", { engine, query: `"${q}"` }); } catch (e) { UI.origError = e.message || String(e); }
+    // a hit whose snippet carries 8 words in a row of the sentence
+    const ws = norm(s).split(" ");
+    const grams = new Set(); for (let k = 0; k + 8 <= ws.length; k++) grams.add(ws.slice(k, k + 8).join(" "));
+    const hit = (hits || []).find((h) => { const sn = norm(`${h.title} ${h.snippet}`); for (const g of grams) if (sn.includes(g)) return true; return false; });
+    if (hit) { found++; matches.push({ quote: s, url: hit.url, title: hit.title }); }
+  }
+  UI.origBusy = false;
+  UI.orig = { pct: Math.round(100 - (found * 100) / sentences.length), checked: sentences.length, matches };
+  refreshPanel();
+}
+
+// ---------------------------------------------------------------- right-click, keys, double-click
+function domSelectionHost(text) {
+  return { target: async () => ({ text, selection: true }) };
+}
+async function aiMenu(e, k) {
+  const host = k ? HOSTS[k] : null;
+  const sel = String(getSelection() || "").trim();
+  const items = [];
+  // on an underline: its fix first
+  const s = k === "text" ? shownAtCM(e) : null;
+  if (s) {
+    items.push({ header: cat(s.issue.cat).label }, { label: s.issue.replacement || "(remove)", icon: "check", action: () => accept(s) }, { label: "Dismiss", icon: "eye-off", action: () => dismiss(s) }, "-");
+  }
+  if (k === "text") {
+    const v = getView(); const r = v.state.selection.main; const has = r.to > r.from;
+    items.push(
+      { label: "Cut", key: "Ctrl+X", disabled: !has, action: () => { navigator.clipboard.writeText(v.state.sliceDoc(r.from, r.to)); v.dispatch({ changes: { from: r.from, to: r.to, insert: "" }, userEvent: "delete.cut" }); } },
+      { label: "Copy", key: "Ctrl+C", icon: "copy", disabled: !has, action: () => navigator.clipboard.writeText(v.state.sliceDoc(r.from, r.to)) },
+      { label: "Paste", key: "Ctrl+V", action: async () => { const t = await navigator.clipboard.readText().catch(() => ""); if (t) v.dispatch(v.state.replaceSelection(t)); } },
       "-",
-      ...LANGS.filter(([c]) => c !== cur).slice(0, 10).map(([c, n]) => ({ label: n, action: () => translateText(text, { to: c, at }) })),
-    ] },
-  ]);
-});
+    );
+  } else if (!k && sel) {
+    items.push({ label: "Copy", key: "Ctrl+C", icon: "copy", action: () => navigator.clipboard.writeText(sel) }, "-");
+  }
+  const h = host || (sel ? domSelectionHost(sel) : null);
+  if (!h) return false;
+  if (host && cfg().enabled) items.push({ label: "Check writing with AI", key: "Ctrl+Alt+G", icon: "wand", action: checkNow }, { label: "Ask AI…", key: "Ctrl+Alt+K", icon: "sparkles", action: () => openAssist("ask", h, { at: { x: e.clientX, y: e.clientY } }) });
+  items.push(
+    { label: "Translate", key: "Ctrl+Alt+T", icon: "globe", action: () => openAssist("translate", h, { at: { x: e.clientX, y: e.clientY } }) },
+    { label: "Look up meaning", key: "Ctrl+Alt+D", icon: "search", action: () => openAssist("meaning", h, { at: { x: e.clientX, y: e.clientY } }) },
+  );
+  if (k === "text") { const v = getView(); items.push("-", { label: "Select All", key: "Ctrl+A", action: () => v.dispatch({ selection: { anchor: 0, head: v.state.doc.length } }) }); }
+  showContextMenu(e, items);
+  return true;
+}
+
+export function initWriting() {
+  // the editor: our menu instead of the browser's
+  addEditorExtension((k) => [EditorView.domEventHandlers({ contextmenu(e) { e.preventDefault(); aiMenu(e, TEXT_KINDS.has(k) ? "text" : null).then((ok) => { if (!ok) aiMenu(e, null); }); return true; } })]);
+  // Word documents and slides ask for it
+  addEventListener("callio-ai-menu", (ev) => { const { event, kind: k } = ev.detail; aiMenu(event, k); });
+  // text selected anywhere else (the preview, a PDF, the chat)
+  document.addEventListener("contextmenu", (e) => {
+    if (e.defaultPrevented || e.target.closest?.(".cm-editor, input, textarea, select, .tree-item, .tab, [contenteditable=true], .wd-scroll, .dk-stage")) return;
+    if (!String(getSelection() || "").trim()) return;
+    e.preventDefault();
+    aiMenu(e, null);
+  });
+  // double-click a word: translate it (or its meaning)
+  const dbl = (e, k) => {
+    const mode = cfg().dblclick;
+    if (mode === "off") return;
+    const t = activeTab();
+    if (k === "text" && !TEXT_KINDS.has(t?.kind)) return;
+    const at = { x: e.clientX, y: e.clientY };
+    setTimeout(async () => {
+      let text = "";
+      if (k === "text") { const v = getView(); const r = v?.state.selection.main; if (r && r.to > r.from) text = v.state.sliceDoc(r.from, r.to); }
+      else if (k === "word") { const tg = await HOSTS.word.target().catch(() => null); if (tg?.selection) text = tg.text; }
+      else text = String(getSelection() || "");
+      text = text.trim();
+      if (!text || text.length > 60 || /\n/.test(text) || !/\p{L}/u.test(text)) return;
+      openAssist(mode, k ? HOSTS[k] : domSelectionHost(text), { at, ...(k ? {} : { text }) });
+    }, k === "word" ? 120 : 30);
+  };
+  addEditorExtension((k) => (TEXT_KINDS.has(k) ? [EditorView.domEventHandlers({ dblclick(e) { dbl(e, "text"); return false; } })] : []));
+  addEventListener("callio-ai-dblclick", (ev) => dbl(ev.detail.event, ev.detail.kind));
+  document.addEventListener("dblclick", (e) => { if (e.target.closest?.("#preview, .md-body, .pdf-page, .textLayer, #ai-panel .msg")) dbl(e, null); });
+  // keys
+  document.addEventListener("keydown", (e) => {
+    if (!(e.ctrlKey || e.metaKey) || !e.altKey || e.shiftKey) return;
+    const key = e.key.toLowerCase();
+    if (!["g", "k", "t", "d"].includes(key)) return;
+    const k = hostKind();
+    const sel = String(getSelection() || "").trim();
+    const h = k ? HOSTS[k] : sel ? domSelectionHost(sel) : null;
+    if (!h) return;
+    e.preventDefault();
+    if (key === "g") checkNow();
+    else openAssist(key === "k" ? "ask" : key === "t" ? "translate" : "meaning", h);
+  }, true);
+  // the toolbar button
+  const b = document.getElementById("btn-write");
+  if (b) b.onclick = () => { UI.panel = !UI.panel; if (UI.panel) checkNow(); else refreshAll(); };
+  // follow the documents
+  addEventListener("callio-doc-changed", () => scheduleCollect(400));
+  addEventListener("callio-tab-switched", () => { closeCard(); closeAssist(); scheduleCollect(60); });
+  setInterval(() => { const t = activeTab(); const k = hostKind(t); if (k !== kind || (k && t && W !== stateFor(t))) scheduleCollect(0); else if (k) refreshButton(); }, 700);
+  scheduleCollect(800);
+}

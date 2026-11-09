@@ -22,6 +22,16 @@ static LAST_USED: AtomicU64 = AtomicU64::new(0);
 const LABEL: &str = "callio-websearch";
 const RESULT_HOST: &str = "callio-result.invalid";
 
+/// The engine Claude Code's web_search uses (set for each run from the chat's choice).
+static CC_ENGINE: Mutex<String> = Mutex::new(String::new());
+pub fn set_cc_engine(e: &str) {
+    *CC_ENGINE.lock().unwrap() = e.to_string();
+}
+pub fn cc_engine() -> String {
+    let e = CC_ENGINE.lock().unwrap().clone();
+    if e.is_empty() || e == "auto" { "google".into() } else { e }
+}
+
 pub fn init(app: &AppHandle) {
     let _ = APP.set(app.clone());
 }

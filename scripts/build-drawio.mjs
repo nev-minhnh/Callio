@@ -5,7 +5,8 @@
 // languages Callio doesn't offer (English and Vietnamese are kept).
 //   node scripts/build-drawio.mjs <path to drawio/src/main/webapp> <out.zip>
 import { readdirSync, statSync, readFileSync, writeFileSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { join, relative, sep, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { zipSync } from "fflate";
 
 const [root, out] = process.argv.slice(2);
@@ -25,7 +26,9 @@ let n = 0, bytes = 0;
     if (statSync(p).isDirectory()) { walk(p); continue; }
     if (SKIP.some((re) => re.test(rel))) continue;
     if (/^resources\/dia_?[^/]*\.txt$/.test(rel) && !KEEP_LANG.has(rel.slice(10))) continue;
-    const data = readFileSync(p);
+    let data = readFileSync(p);
+    // Callio's glue (no popup windows; links open in the browser) runs after draw.io has loaded
+    if (rel === "js/PostConfig.js") data = Buffer.concat([data, readFileSync(join(dirname(fileURLToPath(import.meta.url)), "drawio", "callio-glue.js"))]);
     // already-compressed files are stored as they are
     files[rel] = [data, { level: /\.(png|jpe?g|gif|webp|woff2?|zip|ico)$/i.test(rel) ? 0 : 9 }];
     n++; bytes += data.length;

@@ -133,6 +133,9 @@ async function onMessage(e) {
       await saveExport(t, m);
       break;
     }
+    case "callio-open-url":
+      if (/^(https?:|mailto:)/i.test(m.url || "")) api.openUrl(m.url).catch(() => {});
+      break;
     case "exit":
       break;
   }

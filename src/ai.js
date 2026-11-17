@@ -384,6 +384,7 @@ export function toggleAIPanel(force) {
   }
   $("#btn-ai").classList.toggle("on", show);
   if (show) { refreshModelSelect(); renderContext(); $("#ai-text").focus(); if (!skillList.length) scanSkills(); offerContinue(); }
+  if (show) import("./cc-quota.js").then((m) => m.refreshQuota());
   if (show !== !!settings.aiPanel) updateSettings({ aiPanel: show });
 }
 

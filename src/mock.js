@@ -136,6 +136,13 @@ export async function invoke(cmd, a, opts) {
     case "cc_restore": files.set(a.path, a.backup.slice(2)); return null;
     case "cc_reply": ccReplies.get(a.rpc)?.(a.value); return null;
     case "cc_cancel": cancel = true; for (const f of ccReplies.values()) f({ allow: false }); return null;
+    case "cc_usage": {
+      await new Promise((r) => setTimeout(r, 600));
+      const h = (n) => new Date(Date.now() + n * 3600e3).toISOString();
+      window.__usageN = (window.__usageN || 0) + 1;
+      return { session: {}, subscription_type: "max", rate_limits_available: true, behaviors: null,
+        rate_limits: { five_hour: { utilization: 41 + window.__usageN, resets_at: h(2.2) }, seven_day: { utilization: 73, resets_at: h(80) }, model_scoped: [{ display_name: "Fable", utilization: 92, resets_at: h(80) }], extra_usage: null } };
+    }
     case "cc_run": {
       cancel = false;
       const id = a.req.id, ev = (e) => emit("cc-event", { id, ev: e });

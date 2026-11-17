@@ -74,6 +74,11 @@ const PATTERNS = [
   [/^Use (.+)$/, "Dùng $1"],
   [/^Remove (.+)\?$/, "Gỡ $1?"],
   [/^(.+) is large$/, "$1 có dung lượng lớn"],
+  [/^([\s\S]+)\n(Read just now|Read (\d+) min ago) from Claude Code · click to read again$/, (m, body, r, n) => body.split("\n").map((l) => l
+    .replace(/^5-hour limit/, "Giới hạn 5 giờ").replace(/^Weekly limit \(all models\)/, "Giới hạn tuần (mọi mô hình)").replace(/^Weekly limit \((.+?)\)/, "Giới hạn tuần ($1)")
+    .replace(/% used/, "% đã dùng").replace(/ · resets in (.+?) \(/, " · đặt lại sau $1 (").replace(/(\d+) min/g, "$1 phút").replace(/(\d+) h /g, "$1 giờ ").replace(/(\d+) d /g, "$1 ngày ").replace(/(\d+) h \(/, "$1 giờ (")).join("\n")
+    + "\n" + (n ? `Đọc ${n} phút trước` : "Vừa đọc") + " từ Claude Code · bấm để đọc lại"],
+  [/^(.+) — click to try again$/, "$1 — bấm để thử lại"],
   [/^Line endings: (.+) — click to change$/, "Kết thúc dòng: $1 — bấm để đổi"],
   [/^Conversations are saved with this folder: (.+)$/, "Cuộc trò chuyện được lưu cùng thư mục này: $1"],
   [/^Show only (.+)$/, (m, a) => "Chỉ hiện " + (VI[a] || a)],

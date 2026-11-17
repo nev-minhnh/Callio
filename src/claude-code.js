@@ -284,6 +284,8 @@ export async function runTurn(text, ui) {
     runHandlers.delete(id);
     activeRun = null;
     for (const [rpc, c] of cards) if (el.contains(c)) { c.remove(); cards.delete(rpc); }
+    // the answer used some of the plan: read the real numbers again
+    import("./cc-quota.js").then((m) => m.refreshQuota(true));
   }
   ui.result = res;
   if (res.sessionId) ui.session.id = res.sessionId;
@@ -394,6 +396,7 @@ export async function renderCCSettings(changed) {
   const who = s.auth?.email || s.auth?.account?.email || "";
   box.innerHTML = `
     <label class="check"><input type="checkbox" id="cc-enable" ${settings.ccEnabled ? "checked" : ""}> Use Claude Code (works with a Claude Pro or Max plan, no API key)</label>
+    <label class="check"><input type="checkbox" id="cc-quota" ${settings.ccQuota !== false ? "checked" : ""}> Show plan usage in the AI panel (5-hour, weekly and per-model limits; costs no quota)</label>
     <div class="cc-status ${s.installed && s.loggedIn ? "ok" : ""}">
       ${!s.installed ? `<span>Claude Code isn't installed.</span><button type="button" class="primary small" id="cc-install">Install Claude Code</button>`
         : `<span>Claude Code ${esc((s.version || "").replace(/\s*\(.*\)/, ""))} — ${s.loggedIn ? "signed in with " : ""}<b>${esc(authLabel)}</b>${who ? ` (${esc(who)})` : ""}</span>
@@ -405,10 +408,12 @@ export async function renderCCSettings(changed) {
       <select id="cc-mode">${CC_MODES.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select></label>
     <p class="note">Callio runs Anthropic's official Claude Code in your project folder with your own sign-in; Callio never sees your password or tokens. Usage counts toward your plan's limits (shared with claude.ai). Every file is saved as a version before each answer, and changed files are shown as diffs with Undo.
     ${s.installed && !s.gitBash ? " Optional: install <a href=\"#\" data-url=\"https://git-scm.com/download/win\">Git for Windows</a> so Claude Code can use its Bash tool (it uses PowerShell otherwise)." : ""}</p>`;
+  box.querySelector("#cc-quota").onchange = (e) => { updateSettings({ ccQuota: e.target.checked }); import("./cc-quota.js").then((m) => m.refreshQuota(true)); };
   box.querySelector("#cc-enable").onchange = (e) => {
     updateSettings({ ccEnabled: e.target.checked, ...(e.target.checked && !settings.aiModel_chat ? { aiModel_chat: "claudecode|default" } : {}) });
     import("./ai.js").then((m) => { m.refreshModelSelect(); m.refreshRoleSelects(); });
     ccChanged?.();
+    import("./cc-quota.js").then((m) => m.refreshQuota(true));
   };
   box.querySelector("#cc-mode").value = settings.ccPermissionMode || "default";
   box.querySelector("#cc-mode").onchange = async (e) => {

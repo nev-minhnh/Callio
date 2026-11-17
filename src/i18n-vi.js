@@ -2115,5 +2115,9 @@ export default {
 "Checking is stopped — nothing is sent to the AI. Check page or Whole document turns it back on.": "Đã dừng kiểm tra — không gửi gì cho AI. Bấm Kiểm tra trang hoặc Toàn bộ tài liệu để bật lại.",
 "The whole document has been checked": "Đã kiểm tra toàn bộ tài liệu",
 "Check the text on screen (what was checked and hasn't changed isn't sent again) — turns checking back on": "Kiểm tra văn bản trên màn hình (phần đã kiểm tra và không đổi sẽ không gửi lại) — bật lại kiểm tra",
-"Check the whole document — turns checking back on": "Kiểm tra toàn bộ tài liệu — bật lại kiểm tra"
+"Check the whole document — turns checking back on": "Kiểm tra toàn bộ tài liệu — bật lại kiểm tra",
+"Week": "Tuần",
+"Reading usage…": "Đang đọc mức dùng…",
+"Usage unavailable": "Không đọc được mức dùng",
+"Show plan usage in the AI panel (5-hour, weekly and per-model limits; costs no quota)": "Hiện mức dùng gói trong khung AI (giới hạn 5 giờ, tuần và theo mô hình; không tốn quota)"
 };

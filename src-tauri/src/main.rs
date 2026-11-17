@@ -205,6 +205,7 @@ fn main() {
             ai::ai_test,
             ai::bib::verify_bib,
             claude_code::cc_status,
+            claude_code::cc_usage,
             claude_code::cc_install,
             claude_code::cc_login,
             claude_code::cc_logout,

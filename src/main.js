@@ -3017,6 +3017,7 @@ async function boot() {
   initAI();
   initInline();
   initWriting();
+  import("./cc-quota.js").then((m) => m.initQuota());
   initUndo();
   initHistory({
     activeTab,

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.15.0
+
+- **Claude plan usage in the AI panel.** With Claude Code turned on, the row under the chat toolbar (next to the conversation's name) shows the **5-hour** limit, the **weekly** limit and the per-model weekly limits (**Fable**…), each as a small meter with its percentage — green, amber from 70 %, red from 90 %. Hover for when each one resets; click to read them again.
+  - The numbers are the ones Claude Code's own `/usage` screen shows. Callio asks Claude Code for them (its `get_usage` request): no model is called, so it costs no quota, and Callio never touches your sign-in.
+  - They are read when the panel opens, after every Claude Code answer, and once a minute while the panel is in view (not while Callio is minimised or the panel is closed).
+  - Turn it off in Settings → AI → Providers → Claude Code → *Show plan usage in the AI panel*.
+
 ## 0.14.2
 
 - Writing assistant: pressing *Check page* (or anything that redraws the panel quickly) no longer stacks extra rows of model / effort / Thinking controls — there is always exactly one. The same is fixed in the Ask AI / Translate / Meaning popup when switching modes quickly.

@@ -122,6 +122,52 @@ pub async fn cc_status() -> CmdResult<CcStatus> {
     .es()
 }
 
+/// Plan usage — the 5-hour window, the weekly window and the per-model weekly windows (Fable…)
+/// — as Claude Code's own /usage screen reads it. Claude Code is started without a prompt and
+/// asked with its `get_usage` control request: no model is called, so asking costs no quota,
+/// and Callio never touches the sign-in (Claude Code does the asking with its own).
+/// Returns `{subscription_type, rate_limits_available, rate_limits: {five_hour, seven_day,
+/// model_scoped: [{display_name, utilization, resets_at}], …}}`; utilization is 0-100.
+#[tauri::command]
+pub async fn cc_usage() -> CmdResult<Value> {
+    tauri::async_runtime::spawn_blocking(|| -> Result<Value, String> {
+        let exe = find_claude().ok_or("Claude Code isn't installed.")?;
+        // a folder of its own: no project settings, hooks or trust questions get involved
+        let dir = std::env::temp_dir().join("callio-usage");
+        let _ = std::fs::create_dir_all(&dir);
+        let mut c = claude_cmd(&exe);
+        c.current_dir(&dir).args(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--strict-mcp-config", "--no-session-persistence"]);
+        c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+        let mut child = c.spawn().map_err(|e| format!("Couldn't start Claude Code: {e}"))?;
+        let mut stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let _ = stdin.write_all(b"{\"type\":\"control_request\",\"request_id\":\"callio-usage\",\"request\":{\"subtype\":\"get_usage\",\"skip_behaviors\":true}}\n");
+        let _ = stdin.flush();
+        let (tx, rx) = std::sync::mpsc::channel::<Result<Value, String>>();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                let Ok(v) = serde_json::from_str::<Value>(line.trim()) else { continue };
+                if v["type"] == "control_response" && v["response"]["request_id"] == "callio-usage" {
+                    let r = &v["response"];
+                    let _ = tx.send(if r["subtype"] == "success" { Ok(r["response"].clone()) } else { Err(r["error"].as_str().unwrap_or("Claude Code couldn't read the usage.").to_string()) });
+                    return;
+                }
+            }
+            let _ = tx.send(Err("This version of Claude Code doesn't report plan usage — update Claude Code.".into()));
+        });
+        // stdin stays open until the answer is in (closing it earlier ends the session)
+        let out = rx.recv_timeout(Duration::from_secs(25)).unwrap_or_else(|_| Err("Claude Code didn't answer in time.".into()));
+        drop(stdin);
+        let _ = child.kill();
+        let _ = child.wait();
+        out
+    })
+    .await
+    .es()?
+}
+
 /// Install Claude Code with Anthropic's official installer; output lines go to "cc-install".
 #[tauri::command]
 pub async fn cc_install(app: AppHandle) -> CmdResult<()> {

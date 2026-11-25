@@ -289,6 +289,7 @@ export async function sendMessage(text, prompt, ui) {
     rt.handle = r.handle; rt.cwd = cwd; rt.model = model;
     byHandle.set(rt.handle, rt);
   }
+  if (rt.model && rt.model !== model) rt.modelSeen = null; // switched: what the process said at start is stale
   rt.model = model;
   const m = { uuid: uid(), text, ui, delivered: false, mode };
   rt.msgs.set(m.uuid, m);
@@ -449,7 +450,7 @@ function openSeg(rt, m) {
   const ui = m?.ui || rt.ui0;
   const model = rt.modelSeen || rt.model || "default";
   const eff = settings.aiEffort && !/haiku/.test(model) ? ` · effort ${esc({ xhigh: "extra" }[settings.aiEffort] || settings.aiEffort)}` : "";
-  const el2 = addMsg("assistant cc", `<div class="cc-badge">Claude Code${model !== "default" ? ` · ${esc(model)}` : ""}${eff} · ${esc(basename(rt.cwd || ""))}</div><div class="ai-tools"></div><div class="ai-body markdown-body"><span class="ai-typing">●●●</span></div><div class="cc-changes"></div>`, rt.tab.list);
+  const el2 = addMsg("assistant cc", `<div class="cc-badge">Claude Code<span class="cc-model">${model !== "default" ? ` · ${esc(model)}` : ""}</span>${eff} · ${esc(basename(rt.cwd || ""))}</div><div class="ai-tools"></div><div class="ai-body markdown-body"><span class="ai-typing">●●●</span></div><div class="cc-changes"></div>`, rt.tab.list);
   const body = el2.querySelector(".ai-body");
   const seg = { el: el2, toolsEl: el2.querySelector(".ai-tools"), body, changesEl: el2.querySelector(".cc-changes"), think: ui.thinkBox(el2), stream: createStreamer(body, ui.renderMd, rt.tab.list), full: "", streamed: false, toolEls: new Map(), toolFiles: new Map(), liveTags: new Map(), m, ui };
   rt.seg = seg;
@@ -536,6 +537,12 @@ function onEv(rt, ev) {
   } else if (ev.t === "thinking") seg.think.add(ev.text || "");
   else if (ev.t === "message_start") { if (seg.full && !seg.full.endsWith("\n\n")) seg.full += "\n\n"; }
   else if (ev.t === "assistant") {
+    // the badge names the model that really answered (from the API), not the one asked for
+    if (ev.model && ev.model !== "<synthetic>") {
+      rt.modelSeen = ev.model;
+      const b = seg.el.querySelector(".cc-badge .cc-model");
+      if (b && b.textContent !== ` · ${ev.model}`) b.textContent = ` · ${ev.model}`;
+    }
     if (!seg.streamed && ev.text) { seg.full += (seg.full ? "\n\n" : "") + ev.text; seg.stream.set(seg.full); }
     for (const tl of ev.tools || []) {
       rt.toolParent.set(tl.id, null);

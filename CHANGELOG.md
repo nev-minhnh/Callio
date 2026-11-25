@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.21.1
+
+- Claude Code chat: the line above each answer now names the model that actually wrote it, as reported by Claude Code, and follows a model switch made in the middle of a session. Before, it could keep showing the model the session started with, or the one picked in the menu before Claude Code had switched.
+
 ## 0.21.0
 
 ### AI chat in its own window

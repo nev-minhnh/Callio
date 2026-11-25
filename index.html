@@ -47,6 +47,7 @@
           <div id="menu-open" class="menu" role="menu" hidden>
             <button role="menuitem" data-act="open-file"><span class="fi"><svg class="ic" aria-hidden="true"><use href="#ic-file"/></svg></span><span>Open file…</span><kbd>Ctrl+O</kbd></button>
             <button role="menuitem" data-act="open-folder"><span class="fi"><svg class="ic" aria-hidden="true"><use href="#ic-folder"/></svg></span><span>Open folder…</span><kbd>Ctrl+Shift+O</kbd></button>
+            <button role="menuitem" data-act="restore-drafts"><span class="fi"><svg class="ic" aria-hidden="true"><use href="#ic-refresh"/></svg></span><span>Restore drafts…</span><kbd></kbd></button>
           </div>
         </div>
         <div class="menu-wrap">
@@ -358,6 +359,13 @@
           <button type="button" data-sec="ai"><svg class="ic" aria-hidden="true"><use href="#ic-sparkles"/></svg><span>AI</span></button>
           <button type="button" data-sec="library"><svg class="ic" aria-hidden="true"><use href="#ic-library"/></svg><span>Library</span></button>
           <button type="button" data-sec="ocr"><svg class="ic" aria-hidden="true"><use href="#ic-ocr"/></svg><span>OCR</span></button>
+          <!-- [memory] nav -->
+          <button type="button" data-sec="memory"><svg class="ic" aria-hidden="true"><use href="#ic-notebook"/></svg><span>AI memory</span></button>
+          <button type="button" data-sec="storage"><svg class="ic" aria-hidden="true"><use href="#ic-archive"/></svg><span>Data storage</span></button>
+          <!-- [jupyter] nav -->
+          <button type="button" data-sec="jupyter"><svg class="ic" aria-hidden="true"><use href="#ic-notebook"/></svg><span>Jupyter</span></button>
+          <!-- [wsl] nav -->
+          <!-- [ssh] nav -->
           <button type="button" data-sec="files"><svg class="ic" aria-hidden="true"><use href="#ic-file-types"/></svg><span>File types</span></button>
           <button type="button" data-sec="about"><svg class="ic" aria-hidden="true"><use href="#ic-info"/></svg><span>About</span></button>
         </div>
@@ -366,6 +374,7 @@
             <h3 class="set-h">Interface</h3>
             <label>Language <select name="uiLang" data-noi18n><option value="en">English</option><option value="vi">Tiếng Việt</option></select></label>
             <label>Theme <select name="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+            <label>Text effect <select name="streamFx" title="How the AI's answers appear"><option value="smooth">Smooth</option><option value="fast">Fast</option><option value="off">Off</option></select></label>
             <h3 class="set-h">Text editor</h3>
             <label>Font size <input name="fontSize" type="number" min="9" max="32" /></label>
             <label>Editor font <input name="fontFamily" type="text" placeholder="Default" /></label>
@@ -441,6 +450,23 @@
           <section data-sec="ocr" hidden>
             <div id="ocr-settings"></div>
           </section>
+          <!-- [memory] sections -->
+          <section data-sec="memory" hidden><div id="mem-settings" class="no-row"></div></section>
+          <section data-sec="storage" hidden><div id="storage-settings" class="no-row"></div></section>
+
+          <!-- [jupyter] sections -->
+          <section data-sec="jupyter" hidden>
+            <h3 class="set-h">Jupyter</h3>
+            <label>Default Python interpreter (empty = Auto) <input name="jupyterDefaultPython" type="text" placeholder="Auto" /></label>
+            <label>Stop the local Jupyter server after (minutes without kernels, 0 = never) <input name="jupyterIdleMin" type="number" min="0" max="1440" /></label>
+            <label>Collapse outputs longer than (lines) <input name="jupyterMaxLines" type="number" min="10" max="100000" /></label>
+            <label class="check"><input name="jupyterTrustHtml" type="checkbox" /> Show HTML outputs (tables, rich display; scripts never run)</label>
+          </section>
+
+          <!-- [wsl] sections -->
+
+          <!-- [ssh] sections -->
+
           <section data-sec="files" hidden>
             <h3 class="set-h">Open with</h3>
             <p class="note">Register Callio in Windows <b>Open with…</b> for these file types (current user, no admin rights needed):</p>
@@ -516,7 +542,7 @@
       <p class="note">Callio keeps your AI conversations for this folder on this PC and recalls the relevant bits automatically — by matching words, names, citation keys and files, without asking any AI model (no extra tokens). Pinned notes are always included.</p>
       <h3 class="set-h">Pinned</h3>
       <div id="mem-pins"></div>
-      <div class="row"><button type="button" id="mem-add" class="small">＋ Pin a note…</button></div>
+      <div class="row"><button type="button" id="mem-add" class="small">＋ Pin a note…</button><button type="button" id="mem-update" class="small">Update the memory notes…</button></div>
       <h3 class="set-h">Recent messages</h3>
       <div id="mem-recent" class="mem-list"></div>
     </div>

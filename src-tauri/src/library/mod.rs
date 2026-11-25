@@ -8,7 +8,6 @@ pub mod server;
 
 pub mod resolve;
 use crate::ai::tools::{clean_doi, title_similarity};
-use crate::settings::data_dir;
 use crate::textindex::{snippet, Index};
 use crate::util::{CmdResult, ErrStr};
 use anyhow::{anyhow, bail, Result};
@@ -76,7 +75,7 @@ pub struct Library {
 }
 
 pub fn dir(app: &AppHandle) -> PathBuf {
-    data_dir(app).join("library")
+    crate::settings::category_dir(app, "library")
 }
 fn paper_dir(app: &AppHandle, id: &str) -> PathBuf {
     dir(app).join("papers").join(id)
@@ -1214,7 +1213,7 @@ pub async fn csl_fetch(app: AppHandle, kind: String, name: String) -> CmdResult<
         "locale" => (format!("https://raw.githubusercontent.com/citation-style-language/locales/master/locales-{name}.xml"), format!("locales-{name}.xml")),
         _ => return Err("bad kind".into()),
     };
-    let cache = data_dir(&app).join("csl");
+    let cache = crate::settings::category_dir(&app, "csl");
     let path = cache.join(&file);
     if let Ok(s) = std::fs::read_to_string(&path) {
         return Ok(s);

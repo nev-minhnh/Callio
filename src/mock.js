@@ -1,4 +1,5 @@
 // Browser-only mock backend for UI development and testing (not used in the app).
+const MOCK_EXT = import.meta.glob("./mock-ext/*.js", { eager: true });
 const files = new Map([
   ["C:/demo/README.md", `# Callio demo
 
@@ -51,7 +52,7 @@ export async function listen(name, cb) {
   (listeners[name] ||= []).push(cb);
   return () => { listeners[name] = listeners[name].filter((x) => x !== cb); };
 }
-const emit = (name, payload) => (listeners[name] || []).forEach((cb) => cb({ payload }));
+export const emit = (name, payload) => (listeners[name] || []).forEach((cb) => cb({ payload }));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let installed = { tectonic: false, tinytex: false };
 const hist = {};
@@ -83,6 +84,8 @@ export async function invoke(cmd, a, opts) {
     const [text, encoding] = decodeBytes(new Uint8Array(await r.arrayBuffer()), a.encoding, "windows-1252");
     return { text, mtime: 1, encoding };
   }
+  // feature mocks: every src/mock-ext/*.js exports handle(cmd, args) → a value, or undefined to pass
+  for (const m of Object.values(MOCK_EXT)) { const r = await m.handle?.(cmd, a, opts); if (r !== undefined) return r; }
   if (cmd === "system_ansi") return "windows-1252";
   if (cmd === "list_dir" && real(a.path)) { const r = await fetch("/__ls?path=" + encodeURIComponent(a.path)); if (!r.ok) throw await r.text(); return await r.json(); }
   if (cmd === "path_info" && real(a.path)) return await (await fetch("/__stat?path=" + encodeURIComponent(a.path))).json();
@@ -327,3 +330,5 @@ export async function invoke(cmd, a, opts) {
     default: return null;
   }
 }
+// for feature mocks in src/mock-ext (they push backend events through this)
+export { emit as mockEmit };

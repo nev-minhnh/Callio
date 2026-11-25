@@ -1,6 +1,6 @@
 [package]
 name = "callio"
-version = "0.15.0"
+version = "0.18.0"
 description = "Callio – Shape your folio. A lightweight editor for Markdown, LaTeX, Word, spreadsheets, presentations, PDF and pictures"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/nev-minhnh/Callio"
@@ -32,10 +32,16 @@ tokio = { version = "1", features = ["time", "macros", "sync", "net", "io-util"]
 getrandom = "0.2"
 sevenz-rust2 = { version = "0.24", default-features = false }
 encoding_rs = "0.8"
+tokio-tungstenite = { version = "0.26", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 [target.'cfg(windows)'.dependencies]
+# same versions as wry's (already in the build): only used to lower a minimised window's memory
+webview2-com = "0.39"
+windows-core = "0.62"
 winreg = "0.55"
-windows-sys = { version = "0.59", features = ["Win32_UI_Shell", "Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_Security_Credentials", "Win32_Security"] }
+windows-sys = { version = "0.59", features = ["Win32_UI_Shell", "Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_Security_Credentials", "Win32_Security", "Win32_Storage_FileSystem", "Win32_Security_WinTrust", "Win32_Security_Cryptography", "Win32_System_JobObjects"] }
 
 [profile.release]
 opt-level = "s"

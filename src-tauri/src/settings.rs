@@ -2,15 +2,21 @@ use crate::util::{CmdResult, ErrStr};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 pub struct SettingsState(pub Mutex<Value>);
 
 pub fn config_dir(app: &AppHandle) -> PathBuf {
     app.path().app_config_dir().unwrap_or_else(|_| std::env::temp_dir().join("Callio"))
 }
+/// The data folder: honours the location pointer and portable mode (see storage.rs).
 pub fn data_dir(app: &AppHandle) -> PathBuf {
-    app.path().app_local_data_dir().unwrap_or_else(|_| std::env::temp_dir().join("Callio"))
+    crate::storage::data_dir(app)
+}
+/// Where one data folder (`library`, `history`, `memory`…) lives: its own location if it was moved
+/// on its own, else under the data folder.
+pub fn category_dir(app: &AppHandle, name: &str) -> PathBuf {
+    crate::storage::category_dir(app, name)
 }
 fn settings_path(app: &AppHandle) -> PathBuf {
     config_dir(app).join("settings.json")
@@ -54,14 +60,32 @@ pub fn load_settings(state: State<SettingsState>) -> Value {
     state.0.lock().unwrap().clone()
 }
 
+/// Saves the settings and tells the other windows. `omit`: keys this window keeps to itself
+/// (an extra window's own layout): they stay as they are on disk.
 #[tauri::command]
-pub fn save_settings(app: AppHandle, state: State<SettingsState>, settings: Value) -> CmdResult<()> {
+pub fn save_settings(app: AppHandle, window: tauri::WebviewWindow, state: State<SettingsState>, settings: Value, omit: Option<Vec<String>>) -> CmdResult<()> {
+    let mut settings = settings;
+    if let (Some(keys), Some(obj)) = (omit, settings.as_object_mut()) {
+        let cur = state.0.lock().unwrap().clone();
+        for k in keys {
+            match cur.get(&k) {
+                Some(v) => {
+                    obj.insert(k, v.clone());
+                }
+                None => {
+                    obj.remove(&k);
+                }
+            }
+        }
+    }
     *state.0.lock().unwrap() = settings.clone();
     let p = settings_path(&app);
     std::fs::create_dir_all(p.parent().unwrap()).es()?;
     let tmp = p.with_extension("json.tmp");
     std::fs::write(&tmp, serde_json::to_vec_pretty(&settings).es()?).es()?;
-    std::fs::rename(&tmp, &p).es()
+    std::fs::rename(&tmp, &p).es()?;
+    let _ = app.emit("settings-changed", serde_json::json!({ "from": window.label() }));
+    Ok(())
 }
 
 // ---------- secrets (Windows Credential Manager) ----------

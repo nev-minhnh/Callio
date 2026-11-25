@@ -1,6 +1,6 @@
 //! Engine management: detect, download and install Tectonic and TinyTeX (latexmk, pdfLaTeX,
 //! XeLaTeX, LuaLaTeX) with live progress, and install missing LaTeX packages on demand.
-use crate::settings::{backend, data_dir, Backend, SettingsState};
+use crate::settings::{backend, Backend, SettingsState};
 use crate::util::{command, run_with_timeout, which, CmdResult, ErrStr};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
@@ -49,16 +49,16 @@ pub fn emit(app: &AppHandle, kind: &str, phase: &str, label: &str, done: u64, to
 // ---------------- locations ----------------
 
 pub fn tectonic_path(app: &AppHandle) -> PathBuf {
-    data_dir(app).join("bin").join(if cfg!(windows) { "tectonic.exe" } else { "tectonic" })
+    crate::settings::category_dir(app, "bin").join(if cfg!(windows) { "tectonic.exe" } else { "tectonic" })
 }
 
 /// TeX misbehaves under paths with spaces or non-ASCII letters (e.g. some Windows user
 /// names), so fall back to ProgramData in that case, as the official TinyTeX script does.
 pub fn tinytex_root(app: &AppHandle) -> PathBuf {
-    let d = data_dir(app);
+    let d = crate::settings::category_dir(app, "TinyTeX");
     let s = d.to_string_lossy();
     if s.is_ascii() && !s.contains(' ') {
-        return d.join("TinyTeX");
+        return d;
     }
     #[cfg(windows)]
     if let Some(pd) = std::env::var_os("ProgramData") {
@@ -70,7 +70,7 @@ pub fn tinytex_root(app: &AppHandle) -> PathBuf {
         }
         return PathBuf::from(pd).join("Callio").join("TinyTeX");
     }
-    d.join("TinyTeX")
+    d
 }
 
 pub fn tinytex_bin(app: &AppHandle) -> Option<PathBuf> {
@@ -87,7 +87,7 @@ pub fn search_dirs(app: &AppHandle, b: &Backend) -> Vec<PathBuf> {
     if let Some(t) = tinytex_bin(app) {
         v.push(t);
     }
-    v.push(data_dir(app).join("bin"));
+    v.push(crate::settings::category_dir(app, "bin"));
     v
 }
 
@@ -320,7 +320,7 @@ async fn install_tectonic(app: &AppHandle, inst: &InstallState) -> Result<Instal
             }).map(|a| (r["tag_name"].as_str().unwrap_or("").trim_start_matches("tectonic@").to_string(), a["browser_download_url"].as_str().unwrap_or("").to_string()))
         })
         .ok_or_else(|| anyhow!("No Tectonic release for {target} found on GitHub"))?;
-    let tmp = data_dir(app).join("downloads").join(format!("tectonic-{version}.zip"));
+    let tmp = crate::settings::category_dir(app, "downloads").join(format!("tectonic-{version}.zip"));
     download(app, inst, kind, &format!("Tectonic {version}"), &url, &tmp).await?;
     emit(app, kind, "extract", "Unpacking Tectonic…", 0, 0);
     let dest = tectonic_path(app);
@@ -350,7 +350,7 @@ async fn install_tinytex(app: &AppHandle, inst: &InstallState) -> Result<Install
     let kind = "tinytex";
     let root = tinytex_root(app);
     let parent = root.parent().unwrap().to_path_buf();
-    let tmp = data_dir(app).join("downloads").join("TinyTeX-1-windows.exe");
+    let tmp = crate::settings::category_dir(app, "downloads").join("TinyTeX-1-windows.exe");
     download(app, inst, kind, "TinyTeX", TINYTEX_URL, &tmp).await?;
 
     // Unpack beside the final location, then swap it in, so a failed or cancelled

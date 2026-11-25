@@ -1,6 +1,7 @@
 // AI assistant: providers & models, chat panel, selection actions with inline diffs,
 // Fix-with-AI for compile errors, skills, citation checks.
 import { createStreamer } from "./stream.js";
+import { chatView, loadHistory, htmlCache, markLive, markDone, stickToBottom, nudge, estimateHeight } from "./chat-view.js";
 import { api, call, listen } from "./api.js";
 import { settings, updateSettings, toast, status, ask, activeTab, getLastCompile, openPath, basename, dirname, folder, compile } from "./main.js";
 import { getView, getSelectionInfo, startReview, endReview, isReviewing, setReviewHooks, setReviewLabel, project, gotoLine } from "./editor.js";
@@ -236,6 +237,22 @@ function excerptAround(doc, pos, max = 80_000) {
 const newSid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const chat = { history: [], busyId: null, ctx: { file: true, sel: true, log: true }, attached: [], cc: { id: null }, ccReady: false, stop: null, mem: `s${Date.now().toString(36)}`, sid: newSid(), title: "", created: Date.now(), project: null };
 
+// [chat-core] Claude Code sessions (cc-sessions.js) keep one chat state per tab: the tab that is in
+// view is the live `chat` object, the others are kept aside and swapped in when picked.
+let ccx = null;
+export function registerSessions(x) { ccx = x; }
+export const chatState = () => chat;
+/** Put another tab's chat state in place; returns the one that was there. */
+export function swapChat(next) {
+  const prev = { ...chat };
+  for (const k of Object.keys(chat)) delete chat[k];
+  Object.assign(chat, next);
+  return prev;
+}
+export function freshChatState(project) {
+  return { history: [], busyId: null, ctx: { ...chat.ctx }, attached: [], cc: { id: null }, ccReady: chat.ccReady, stop: null, mem: `s${Date.now().toString(36)}`, sid: newSid(), title: "", created: Date.now(), project: project ?? sessProject() };
+}
+
 // ---------------- files the AI is reading or editing (tags above the input) ----------------
 const fileTags = new Map(); // norm path → { path, mode, live }
 const nrm = (p) => String(p || "").replace(/\\/g, "/").toLowerCase();
@@ -266,18 +283,19 @@ function renderFileTags() {
 // ---------------- conversations, saved per project folder ----------------
 const sessProject = () => folder || "";
 const sessWhen = (t) => new Date(t).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
-async function saveSession() {
-  if (!chat.history.length) return;
-  if (chat.project === null) chat.project = sessProject();
-  if (!chat.title) {
-    const first = chat.history.find((m) => m.role === "user")?.content || "";
-    chat.title = String(first).replace(/\s+/g, " ").trim().slice(0, 70) || "Conversation";
+export async function saveSession(c = chat) {
+  if (!c.history.length) return;
+  if (c.project === null) c.project = sessProject();
+  if (!c.title) {
+    const first = c.history.find((m) => m.role === "user")?.content || "";
+    c.title = String(first).replace(/\s+/g, " ").trim().slice(0, 70) || "Conversation";
   }
-  const session = { v: 1, title: chat.title, created: chat.created, updated: Date.now(), model: modelFor("chat") || "", ccSession: chat.cc.id || "", mem: chat.mem, history: chat.history, summary: chat.summary || "", summaryUpTo: chat.summaryUpTo || 0 };
-  try { await call("sess_put", { project: chat.project, id: chat.sid, session }); } catch (e) { console.warn("session save", e); }
-  renderSessBar();
+  const session = { v: 1, title: c.title, created: c.created, updated: Date.now(), model: modelFor("chat") || "", ccSession: c.cc.id || "", mem: c.mem, history: c.history, summary: c.summary || "", summaryUpTo: c.summaryUpTo || 0 };
+  try { await call("sess_put", { project: c.project, id: c.sid, session }); } catch (e) { console.warn("session save", e); }
+  if (c === chat) renderSessBar();
+  ccx?.titleChanged?.(c);
 }
-function renderSessBar() {
+export function renderSessBar() {
   const t = $("#ai-sess-title"); if (!t) return;
   t.textContent = chat.title || "New chat";
   const p = chat.project ?? sessProject();
@@ -287,11 +305,13 @@ function renderSessBar() {
 async function listSessions(project = chat.project ?? sessProject()) {
   try { return await call("sess_list", { project }); } catch { return []; }
 }
-async function loadSession(id, project = chat.project ?? sessProject()) {
-  if (chat.busyId) return toast("Wait for the current answer to finish.", "", 2500);
+export async function loadSession(id, project = chat.project ?? sessProject()) {
+  if (ccx?.isBusy()) await ccx.newTab({ silent: true });
+  else if (chat.busyId) return toast("Wait for the current answer to finish.", "", 2500);
   let s;
   try { s = await call("sess_get", { project, id }); } catch (e) { return toast(e.message, "err"); }
   closeSessMenu();
+  ccx?.onReset?.();
   chat.sid = id; chat.project = project; chat.title = s.title || ""; chat.created = s.created || Date.now();
   chat.history = Array.isArray(s.history) ? s.history.filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string") : [];
   chat.summary = s.summary || ""; chat.summaryUpTo = s.summaryUpTo || 0;
@@ -299,17 +319,17 @@ async function loadSession(id, project = chat.project ?? sessProject()) {
   // Claude Code keeps its own transcript: resume it when the chat model is Claude Code
   chat.cc = { id: s.ccSession && isCCModel(modelFor("chat")) ? s.ccSession : null };
   const box = $("#ai-messages");
-  box.innerHTML = "";
-  for (const m of chat.history) {
-    if (m.role === "user") addMsg("user", esc(m.content).replace(/\n/g, "<br>"));
-    else { const el = addMsg("assistant", `<div class="ai-body markdown-body"></div>`); await renderMd(el.querySelector(".ai-body"), m.content || "_(no answer)_"); }
-  }
+  // only the newest messages are built now; older ones are placeholders built when scrolled to,
+  // from the HTML cache when the answer was rendered before (see chat-view.js)
+  await ensureMd();
+  const items = chat.history.map((m) => ({ role: m.role, text: m.content || "" }));
+  loadHistory(box, items, buildHistoryMsg, estimateHeight);
   const note = document.createElement("div");
   note.className = "ai-restored note";
   note.textContent = `Saved conversation · last used ${sessWhen(s.updated || s.created)}${s.ccSession ? (chat.cc.id ? " · Claude Code continues it" : " · switch the model to Claude Code to continue its session") : ""}`;
   box.prepend(note);
-  box.scrollTop = box.scrollHeight;
   renderSessBar();
+  ccx?.titleChanged?.(chat);
 }
 function closeSessMenu() { const m = $("#ai-sess-menu"); if (m) m.hidden = true; }
 async function openSessMenu() {
@@ -345,7 +365,7 @@ async function openSessMenu() {
 /** The open folder changed: conversations belong to the folder, so start fresh there. */
 function onProjectChanged() {
   const p = sessProject();
-  if (chat.project === p || chat.busyId) return;
+  if (chat.project === p || chat.busyId || ccx?.isBusy()) return;
   if (!chat.history.length) { chat.project = p; renderSessBar(); return newChat(true); }
   newChat(true);
 }
@@ -356,8 +376,31 @@ function memProject() { const t = activeTab(); return folder || (t?.path ? dirna
 async function memRecall(query, before = null) {
   const project = memProject();
   if (!memOn() || !project) return null;
-  try { return await call("mem_recall", { project, query, session: chat.mem, budget: 6000, before }); } catch { return null; }
+  let r = null;
+  try { r = await call("mem_recall", { project, query, session: chat.mem, budget: 6000, before }); } catch {}
+  // with an Obsidian vault: what the vault (only the folders the AI may read) says about this question
+  if (settings.memoryStore === "obsidian") {
+    try { const extra = await (await import("./memory-notes.js")).vaultRecall(project, query); if (extra) r = { ...(r || { skills: [] }), text: `${r?.text || ""}\n\n${extra}`.trim() }; } catch {}
+  }
+  return r;
 }
+/** The curated note (MEMORY.md / the vault's project note, capped) for the system prompt of a session. */
+async function memNote() {
+  const project = memProject();
+  if (!memOn() || !project) return "";
+  try { return await (await import("./memory-notes.js")).memoryPrompt(project); } catch { return ""; }
+}
+export const memoryProject = () => memProject();
+export const chatTitle = () => chat.title || "";
+/** The open chat as plain text (for the memory update when there is no Claude Code session transcript). */
+export function chatTranscript() {
+  // a Claude Code session tab keeps its own transcript (the chat's history may not hold it yet)
+  const t = !chat.history.length && ccx?.transcript?.();
+  if (t?.length) return t.map((m) => `${m.role === "user" ? "Author" : "Assistant"}: ${m.text || ""}`).join("\n\n");
+  return chat.history.map((m) => `${m.role === "user" ? "Author" : "Assistant"}: ${typeof m.content === "string" ? m.content : ""}`).join("\n\n");
+}
+/** Whether an answer is being written right now (the data mover refuses meanwhile). */
+export const isBusy = () => !!chat.busyId;
 /** Keep a turn — under the project and conversation it was asked in (captured at send time). */
 function memRecord(entries, project, session) {
   if (!memOn() || !project) return;
@@ -493,6 +536,9 @@ export async function addToChat(path, isDir) {
   renderContext();
 }
 
+/** Extra context for the next questions (a notebook cell) with a button that applies the answer's code block. */
+let extraCtx = null;
+export function setExtraContext(c) { extraCtx = c; }
 function contextBlock() {
   const t = activeTab();
   const v = getView();
@@ -509,6 +555,7 @@ function contextBlock() {
   if (errs.length && chat.ctx.log && (t?.kind === "tex" || t?.kind === "bib")) {
     s += `\n\n# Latest compile errors\n` + errs.map((d) => `- ${d.file ? basename(d.file) : ""}:${d.line || "?"}: ${d.message}`).join("\n");
   }
+  if (extraCtx && t?.kind === "ipynb") s += `\n\n${extraCtx.text}`; // e.g. the notebook cell the author asked for help with
   for (const a of chat.attached) {
     if (a.isDir) s += `\n\n# Folder the user added: ${a.path}\n${(a.list || []).join("\n")}`;
     else if (a.text != null) s += `\n\n# File the user added: ${a.path}\n<file>\n${a.text}\n</file>`;
@@ -518,8 +565,9 @@ function contextBlock() {
 }
 
 let mdLib = null;
-async function renderMd(el, text) {
-  mdLib ??= await import("./md.js");
+const ensureMd = async () => (mdLib ??= await import("./md.js"));
+function renderMdNow(el, text) {
+  htmlCache.renders++;
   el.innerHTML = "";
   mdLib.renderMarkdown(el, text, activeTab()?.path ? dirname(activeTab().path) : "");
   // AI output never loads remote images by itself (a crafted image URL could leak text)
@@ -532,25 +580,57 @@ async function renderMd(el, text) {
     }
   }
 }
-
-/** The final render of a streamed answer, without a jump: same height kept while it swaps. */
-async function settleMd(body, text, stick) {
-  const box = $("#ai-messages");
-  const h = body.offsetHeight;
-  body.style.minHeight = h + "px";
-  await renderMd(body, text);
-  requestAnimationFrame(() => { body.style.minHeight = ""; if (stick) box.scrollTop = box.scrollHeight; });
+async function renderMd(el, text) {
+  await ensureMd();
+  renderMdNow(el, text);
 }
 
-function addMsg(role, html) {
-  const box = $("#ai-messages");
+/** One message of a saved conversation, as an element (HTML from the cache when it was rendered before). */
+function buildHistoryMsg(m) {
+  const el = document.createElement("div");
+  el.className = `ai-msg ${m.role === "user" ? "user" : "assistant"} cv-restored`;
+  if (m.role === "user") { el.innerHTML = esc(m.text).replace(/\n/g, "<br>"); return el; }
+  el.innerHTML = `<div class="ai-body markdown-body"></div>`;
+  const body = el.firstChild, text = m.text || "_(no answer)_";
+  const hit = htmlCache.get(text);
+  if (hit !== undefined) body.innerHTML = hit;
+  else { renderMdNow(body, text); htmlCache.set(text, body.innerHTML); }
+  return el;
+}
+
+/**
+ * The final render of a streamed answer. The streamer already rendered every block once, so
+ * normally nothing changes: the answer is rendered once more off-screen, and only when its
+ * structure differs (e.g. a list split by blank lines) is the shown answer replaced, keeping
+ * its height so nothing jumps. The finished HTML is cached for reopening the conversation.
+ */
+async function settleMd(body, text) {
+  const probe = document.createElement("div");
+  await renderMd(probe, text);
+  htmlCache.set(text, probe.innerHTML);
+  const sig = (r) => [...r.querySelectorAll("p,ul,ol,li,h1,h2,h3,h4,h5,h6,pre,blockquote,table,hr")].map((e) => e.tagName).join(",");
+  const norm = (r) => r.textContent.replace(/\s+/g, " ").trim();
+  if (!(body.dataset.st === "1" && sig(body) === sig(probe) && norm(body) === norm(probe))) {
+    const h = body.offsetHeight;
+    body.style.minHeight = h + "px";
+    body.replaceChildren(...probe.childNodes);
+    requestAnimationFrame(() => { body.style.minHeight = ""; });
+  }
+  delete body.dataset.st;
+  if (body.querySelector("pre > code.language-mermaid")) import("./mermaid.js").then((m) => m.drawMermaidBlocks(body)).catch(() => {});
+  markDone(body.closest(".ai-msg"));
+}
+
+export function addMsg(role, html, box = $("#ai-messages")) {
   box.querySelector(".ai-empty")?.remove();
   const el = document.createElement("div");
   el.className = `ai-msg ${role}`;
   el.innerHTML = html || "";
+  chatView(box);
+  if (role === "user") stickToBottom(box); // sending a message: follow the answer again
+  else if ((html || "").includes("ai-typing")) markLive(el); // being written: never taken out of the page
   box.appendChild(el);
-  box.scrollTop = box.scrollHeight;
-  return el;
+  return el;                               // the list's follower keeps the bottom in view
 }
 
 /**
@@ -598,6 +678,7 @@ function decorateCode(el, selAtSend) {
     bar.className = "code-actions";
     const btn = (label, fn, primary) => { const b = document.createElement("button"); b.textContent = label; if (primary) b.className = "primary"; b.onclick = fn; bar.appendChild(b); };
     if (selAtSend && selAtSend.to > selAtSend.from) btn("Replace selection", () => applyAt(selAtSend.from, selAtSend.to, code, "Chat suggestion", selAtSend), true);
+    if (extraCtx?.apply && activeTab()?.kind === "ipynb") btn(extraCtx.label || "Apply", () => extraCtx.apply(code), true);
     btn("Insert at cursor", () => { const s = getView().state.selection.main; applyAt(s.from, s.to, code, "Chat suggestion"); });
     btn("Copy", async () => { await navigator.clipboard.writeText(code); toast("Copied", "ok", 1200); });
     pre.after(bar);
@@ -670,6 +751,7 @@ async function send(textArg) {
   const input = $("#ai-text");
   const text = (textArg ?? input.value).trim();
   if (!text || chat.busyId) return;
+  // [chat-core] while Claude Code works the text box stays open: Enter queues the message ("Send next")
   closeSlash();
   const slash = await resolveSlash(text);
   if (slash?.builtin) { input.value = ""; return slash.builtin(); }
@@ -695,6 +777,7 @@ async function send(textArg) {
     const [mem, summary] = await Promise.all([memRecall(text, win.oldestAt), ensureSummary(hist, win.dropped)]);
     // stable first (cached by the provider), per-turn context last
     let system = baseSystem() + (await skillsPrompt()) + (mem ? await rememberedSkills(mem.skills) : "");
+    { const note = await memNote(); if (note) system += `\n\n${note}`; }
     const messages = win.messages;
     const ctxText = turnContext(mem?.text || "", summary);
     if (slash?.skill) {
@@ -740,44 +823,54 @@ async function send(textArg) {
 }
 
 async function sendCC(text, slash) {
-  chat.busyId = "cc";
   clearFileTags();
-  const sidAtSend = chat.sid, hist = chat.history;
   try {
     const cc = await import("./claude-code.js");
+    let sx = ccx;
+    if (!sx?.sendMessage) { sx = await import("./cc-sessions.js"); await sx.initSessions(); } // Claude Code was switched on after the start
     if (!chat.ccReady) { chat.ccReady = await cc.ensureReady(); if (!chat.ccReady) return; }
-    $("#ai-text").value = "";
-    addMsg("user", esc(text).replace(/\n/g, "<br>"));
-    $("#ai-send").hidden = true; $("#ai-stop").hidden = false;
-    const scroll = () => { const b = $("#ai-messages"); b.scrollTop = b.scrollHeight; };
     // a Callio-only skill picked with "/": hand its instructions to Claude Code with the message
     let prompt = text;
     if (slash?.skill && !slash.native) prompt = `Use this skill (“${slash.skill.name}”) for my request:\n<skill>\n${(await slash.content()).slice(0, 100_000)}\n</skill>\n\n${slash.rest || "Apply it to my current selection or file."}`;
     const memAt = { project: memProject(), session: chat.mem, file: activeTab()?.path || "", model: modelFor("chat") || "" };
     const mem = await memRecall(text);
-    const memText = (mem ? await rememberedSkills(mem.skills) : "") + (mem?.text ? `\n\n${mem.text}` : "");
+    const note = await memNote();
+    const memText = (note ? `${note}\n\n` : "") + (mem ? await rememberedSkills(mem.skills) : "") + (mem?.text ? `\n\n${mem.text}` : "");
     if (chat.attached.length) prompt += `\n\n(Files and folders I added for context — read them as needed:\n${chat.attached.map((a) => `- ${a.path}${a.isDir ? " (folder)" : ""}`).join("\n")})`;
-    const ui = { addMsg, renderMd, settleMd, scroll, ctx: chat.ctx, session: chat.cc, setStop: (fn) => { chat.stop = fn; }, skillsForClaude, thinkBox, shown: text, memory: memText, fileTag };
-    const full = await cc.runTurn(prompt, ui);
-    hist.push({ role: "user", content: text }, { role: "assistant", content: full || "" });
-    const model = memAt.model;
-    memRecord([{ role: "user", text, file: memAt.file, model, skills: slash?.skill ? [slug(slash.skill.name)] : [] }, { role: "assistant", text: full || "", model, changed: (ui.result?.changed || []).map((c) => c.path) }], memAt.project, memAt.session);
-    if (chat.cc.id && memOn() && memAt.project) call("mem_set_cc", { project: memAt.project, session: chat.cc.id, model }).catch(() => {});
-    if (chat.sid === sidAtSend) saveSession();
+    $("#ai-text").value = "";
+    // Called once per answered message (the message and the answer that followed it), whichever
+    // tab it belongs to: keeps the conversation, the project memory and the saved chat up to date.
+    const done = async (c, full, res) => {
+      c.history.push({ role: "user", content: text }, { role: "assistant", content: full || "" });
+      memRecord([{ role: "user", text, file: memAt.file, model: memAt.model, skills: slash?.skill ? [slug(slash.skill.name)] : [] }, { role: "assistant", text: full || "", model: memAt.model, changed: (res?.changed || []).map((x) => x.path) }], memAt.project, memAt.session);
+      if (c.cc.id && memOn() && memAt.project) call("mem_set_cc", { project: memAt.project, session: c.cc.id, model: memAt.model }).catch(() => {});
+      await saveSession(c);
+    };
+    const ui = { addMsg, renderMd, settleMd, ctx: chat.ctx, skillsForClaude, thinkBox, shown: text, memory: memText, fileTag, done, memProject };
+    await sx.sendMessage(text, prompt, ui);
   } catch (e) {
     chat.ccReady = false;
     const msg = e.message === "CLAUDE_MISSING" ? "Claude Code isn't installed — see AI settings → Claude Code." : e.message;
     addMsg("assistant", `<div class="ai-error">${esc(msg)}</div>`);
   } finally {
-    chat.busyId = null; chat.stop = null;
-    $("#ai-send").hidden = false; $("#ai-stop").hidden = true;
     fileTagsDone();
-    setTimeout(onProjectChanged); // the folder may have changed while answering
   }
 }
 
+/** The helpers a restored Claude Code session needs to send its "Continue" message (cc-sessions.js). */
+export function ccUi(shown) {
+  const done = async (c, full) => { c.history.push({ role: "user", content: shown }, { role: "assistant", content: full || "" }); await saveSession(c); };
+  return { addMsg, renderMd, settleMd, ctx: chat.ctx, skillsForClaude, thinkBox, shown, memory: "", fileTag, done, memProject };
+}
+
 function newChat(silent) {
+  if (ccx && !silent) return void ccx.newTab();
   if (chat.busyId && !silent) return toast("Wait for the current answer to finish.", "", 2500);
+  return resetChat();
+}
+/** The chat in view starts empty (also what a new tab shows). */
+export function resetChat() {
+  ccx?.onReset?.();
   chat.history = []; chat.summary = ""; chat.summaryUpTo = 0;
   chat.attached = [];
   chat.cc = { id: null };
@@ -841,7 +934,8 @@ async function openMemoryDialog() {
     }
   };
   $("#mem-close").onclick = () => dlg.close();
-  $("#mem-add").onclick = async () => { const v = await ask({ title: "Remember", text: "A fact, preference or decision for this project (e.g. “British spelling; the target journal is CSF”).", input: "" }); if (v?.trim()) { await call("mem_pin", { project, text: v.trim() }); draw(); } };
+  $("#mem-add").onclick = async () => { const v = await ask({ title: "Remember", text: "A fact, preference or decision for this project (e.g. “British spelling; the target journal is CSF”).", input: "" }); if (v?.trim()) { await call("mem_pin", { project, text: v.trim() }); import("./memory-notes.js").then((m) => m.rememberLine(project, v.trim())); draw(); } };
+  $("#mem-update").onclick = () => { dlg.close(); import("./memory-notes.js").then((m) => m.updateFromChat()); };
   $("#mem-wipe").onclick = async () => { if (await ask({ title: "Forget everything for this project?", text: "All remembered conversations and pinned notes for this folder are deleted.", buttons: [{ label: "Cancel", value: null }, { label: "Forget everything", value: "y", primary: true }] })) { await call("mem_forget", { project, id: null }); chat.cc.id = null; draw(); } };
   await draw();
   if (!dlg.open) dlg.showModal();
@@ -855,7 +949,7 @@ const BUILTINS = [
   { name: "verify-bib", description: "Check every reference in a .bib file against Crossref/OpenAlex", run: () => verifyBib() },
   { name: "skills", description: "Choose which skills are active", run: async () => { await scanSkills(); openSkillsDialog(); } },
   { name: "remember", description: "Pin a fact, preference or decision for this project (/remember …)", run: null },
-  { name: "memory", description: "See or forget what is remembered about this project", run: () => openMemoryDialog() },
+  { name: "memory", description: "See or forget what is remembered about this project (/memory update writes the notes)", run: () => openMemoryDialog() },
   { name: "brief", description: "A short overview of this project: what it is, what was decided, what's open (made on request only)", run: () => brief() },
   { name: "library", description: "Open the paper library", run: () => import("./library.js").then((m) => m.openLibrary()) },
   { name: "cite", description: "Cite a paper from the library at the cursor (Alt+C)", run: () => import("./cite.js").then((m) => m.openCitePopup()) },
@@ -924,8 +1018,11 @@ async function resolveSlash(text) {
     if (!rest) return openMemoryDialog();
     if (!project) return toast("Open a project folder first.", "", 2500);
     await call("mem_pin", { project, text: rest });
+    import("./memory-notes.js").then((m) => m.rememberLine(project, rest));
     addMsg("assistant", `<div class="note">📌 Remembered for this project: ${esc(rest)}</div>`);
   } };
+  if (it.name === "memory" && /^update$/i.test(rest)) return { builtin: () => import("./memory-notes.js").then((m) => m.updateFromChat()) };
+  if (it.name === "memory" && /^undo$/i.test(rest)) return { builtin: () => import("./memory-notes.js").then((m) => m.undoLast()) };
   if (it.builtin) return { builtin: it.builtin };
   const cc = isCCModel(modelFor("chat"));
   if (it.cc) return { native: cc, rest, skill: { name: it.name }, content: () => call("skills_read", { path: it.cc.path }).catch(() => "") };
@@ -1552,3 +1649,5 @@ export function initAI() {
 }
 
 export { renderContext as refreshAIContext };
+
+if (import.meta.env?.DEV) window.__ai = { renderMd, settleMd, addMsg, toggleAIPanel };

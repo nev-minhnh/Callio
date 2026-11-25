@@ -142,6 +142,7 @@ pub fn handoff(app: AppHandle, files: Vec<String>) -> CmdResult<()> {
     // only existing files, never options
     cmd.args(files.into_iter().filter(|a| !a.starts_with('-') && Path::new(a).is_file()));
     cmd.spawn().map_err(|e| format!("Couldn't start {}: {e}", p.display()))?;
+    crate::chat_ui::clean_exit(&app); // [chat-ui] a normal exit: no "closed unexpectedly" next time
     app.exit(0);
     Ok(())
 }
@@ -167,6 +168,7 @@ fn data_dirs(app: &AppHandle) -> Vec<PathBuf> {
         .into_iter()
         .filter_map(|p| p.ok())
         .collect();
+    v.extend(crate::storage::extra_dirs(app));
     v.sort();
     v.dedup();
     // never anything shallow (a resolver bug must not point at %APPDATA% itself)
@@ -316,6 +318,7 @@ Remove-Item -LiteralPath $PSCommandPath -Force
     bytes.extend_from_slice(s.as_bytes());
     std::fs::write(&script, bytes).map_err(|e| format!("Couldn't write the clean-up script: {e}"))?;
     imp::run_hidden_ps(&script).map_err(|e| format!("Couldn't start the clean-up: {e}"))?;
+    crate::chat_ui::clean_exit(&app); // [chat-ui] a normal exit: no "closed unexpectedly" next time
     app.exit(0);
     Ok(())
 }

@@ -2,7 +2,6 @@
 //!   - a folder with SKILL.md (Anthropic skill format, front matter name/description)
 //!   - a packaged `.skill` / `.zip` file containing SKILL.md
 //!   - any standalone .md guide (style guide, vocabulary list, …)
-use crate::settings::data_dir;
 use crate::util::{CmdResult, ErrStr};
 use serde::Serialize;
 use std::io::Read;
@@ -135,7 +134,7 @@ fn describe(p: &Path, source: &str) -> Option<Skill> {
 }
 
 pub fn own_dir(app: &AppHandle) -> PathBuf {
-    let d = data_dir(app).join("skills");
+    let d = crate::settings::category_dir(app, "skills");
     let _ = std::fs::create_dir_all(&d);
     d
 }

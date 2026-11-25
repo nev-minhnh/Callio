@@ -9,7 +9,7 @@ let observer = null;
 const orig = new WeakMap(); // text node → its English text
 const ATTRS = ["title", "placeholder", "aria-label", "data-tip"];
 // never translated: the user's own content and anything typed or shown from files
-const SKIP = "#tree, .fb, .csl-item, #ls-csl-cur, .rc-name, .rc small, #about-version, .about-slogan, .welcome-slogan, .tv-body, .cm-editor, #md-preview, .md-body, .mdp, #tabs .name, .tree-item .name, .tree-root, #st-path, #folder-name, .msg-body, .msg .md, .ai-msg .content, .as-out, .as-what, .tr-out, .wr-result, .wr-orig, .wr-fix, .wr-line1, .wr-title, .wr-expl, #word-view .wd-pages, #deck-view .dk-stage, .sh-grid, .sh-cells, iframe, .lib-item, .ld-meta, .ld-abstract, input, textarea, [contenteditable=true], [data-noi18n], .pdf-page, .textLayer, .dv-cell, .gv-table, pre, code, kbd, .cm-tooltip, .hv-frame, #nb-view .cell, #csv-view, #struct-view, .pg-list, .lb-card .note, #pdf-wrap .page, .ctx-menu .fn, .outline-item, .hist-item .name";
+const SKIP = "#tree, .fb, .csl-item, #ls-csl-cur, .rc-name, .rc small, #about-version, .about-slogan, .welcome-slogan, .tv-body, .cm-editor, #md-preview, .md-body, .mdp, #tabs .name, .tree-item .name, .tree-root, #st-path, #folder-name, .as-out, .as-what, .tr-out, .wr-result, .wr-orig, .wr-fix, .wr-line1, .wr-title, .wr-expl, #word-view .wd-pages, #deck-view .dk-stage, .sh-grid, .sh-cells, iframe, .lib-item, .ld-meta, .ld-abstract, input, textarea, [contenteditable=true], [data-noi18n], .pdf-page, .textLayer, .dv-cell, .gv-table, pre, code, kbd, .cm-tooltip, .hv-frame, #nb-view .cell, #csv-view, #struct-view, .pg-list, .lb-card .note, #pdf-wrap .page, .ctx-menu .fn, .outline-item, .hist-item .name";
 
 // messages with a value inside
 const PATTERNS = [
@@ -110,9 +110,28 @@ function lookup(s) {
   return null;
 }
 
-function skip(el) { return !el || !!el.closest?.(SKIP); }
+// What the AI (or the user) wrote inside the chat: answers, thinking, tool inputs and outputs,
+// commands, diffs, file names. Never translated. Buttons and labels inside them are interface
+// ("Undo", "Copy"), so those are still translated.
+const CHAT_CONTENT = ".ai-body, .think-text, .tool-chip, .ai-msg.user, .cc-cmd, .cc-file, .cc-log, .cc-perm-head b, .cc-perm-body, .cc-ch-name, .cc-ch a, .cc-diff-view, .ai-sources a, .cv-sum-t, .cv-detail";
+const CHAT_CHROME = "button, summary, .code-actions, .cc-badge, [data-i18n]";
+const stats = { walked: 0, bailed: 0 };
+/** Counters for tests: nodes the translator looked at, and mutations inside chat content it skipped at once. */
+export const i18nStats = () => stats;
+
+function skip(el) {
+  if (!el) return true;
+  if (el.closest?.(SKIP)) return true;
+  return !!el.closest?.(CHAT_CONTENT) && !el.closest(CHAT_CHROME);
+}
+/** True when a mutation happened inside chat content: nothing to translate, so no work at all. */
+function inChatContent(n) {
+  const el = n.nodeType === 1 ? n : n.parentElement;
+  return !!el?.closest?.(CHAT_CONTENT);
+}
 
 function translateNode(n) {
+  stats.walked++;
   if (n.nodeType === 3) {
     const p = n.parentElement;
     if (!p || p.closest("script, style") || skip(p)) return;
@@ -155,10 +174,17 @@ export async function setLanguage(l) {
   if (l === lang && (l === "en" || observer)) return;
   lang = l;
   if (l === "en") { observer?.disconnect(); observer = null; restoreAll(); return; }
-  if (!VI) VI = (await import("./i18n-vi.js")).default;
+  if (!VI) VI = Object.assign({}, (await import("./i18n-vi.js")).default, EXTRA);
   translateNode(document.body);
   observer = new MutationObserver((list) => {
     for (const m of list) {
+      // inside an answer, a thinking box or a tool card: bail out before any tree walk. Only a
+      // button or label added there (interface) is looked at, by itself.
+      if (inChatContent(m.target)) {
+        stats.bailed++;
+        if (m.type === "childList") for (const n of m.addedNodes) if (n.nodeType === 1 && n.matches(CHAT_CHROME)) translateNode(n);
+        continue;
+      }
       if (m.type === "characterData") translateNode(m.target);
       else if (m.type === "attributes") { if (!skip(m.target)) attrs(m.target); }
       else for (const n of m.addedNodes) translateNode(n);
@@ -167,5 +193,18 @@ export async function setLanguage(l) {
   observer.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ATTRS });
 }
 
+/**
+ * Add Vietnamese for a feature's own strings (English → Vietnamese). Features keep their
+ * dictionaries in their own module and call this once at load, so i18n-vi.js stays shared.
+ */
+const EXTRA = {};
+export function addVi(dict) {
+  Object.assign(EXTRA, dict);
+  if (VI) Object.assign(VI, dict);
+  if (VI && lang === "vi" && document.body) translateNode(document.body);
+}
+
 /** Translate one string (for text Callio builds itself, e.g. the window title). */
 export function t(s) { return lang === "vi" && VI ? lookup(s) || s : s; }
+
+if (import.meta.env?.DEV) window.__i18n = { stats: i18nStats };

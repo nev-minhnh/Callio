@@ -59,10 +59,10 @@ pub struct OcrEngines {
 }
 
 fn tess_dir(app: &AppHandle) -> PathBuf {
-    data_dir(app).join("tesseract")
+    crate::settings::category_dir(app, "tesseract")
 }
 fn tessdata_dir(app: &AppHandle) -> PathBuf {
-    data_dir(app).join("tessdata")
+    crate::settings::category_dir(app, "tessdata")
 }
 /// Callio's own copy first, then a normal installation.
 pub fn tesseract_exe(app: &AppHandle) -> Option<PathBuf> {

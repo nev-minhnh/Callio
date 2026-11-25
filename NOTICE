@@ -29,6 +29,13 @@ Editor and preview (JavaScript)
     Original Code: citeproc-js, Copyright (c) 2009-2025 Frank Bennett.
     https://github.com/Juris-M/citeproc-js
 
+Running notebooks (Rust)
+  tokio-tungstenite and tungstenite (WebSocket client)     MIT
+  rustls (TLS, with ring)                                  Apache-2.0 OR ISC OR MIT
+  futures-util                                             MIT OR Apache-2.0
+  Callio talks to the Jupyter Server of the author's own Python or a remote server; Jupyter
+  itself (jupyter_server, ipykernel) is not bundled.
+
 Citation styles
   The CSL styles in src/csl and src/csl-styles.json come from the Citation Style Language
   project (https://citationstyles.org) and are licensed under CC BY-SA 3.0; each file

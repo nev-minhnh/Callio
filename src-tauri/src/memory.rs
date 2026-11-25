@@ -9,7 +9,6 @@
 //!   memory/<hash>/traces.jsonl   one JSON line per turn
 //!   memory/<hash>/pins.json      things the author asked to remember
 //!   memory/<hash>/meta.json      project path, last Claude Code session
-use crate::settings::data_dir;
 use crate::textindex::Index;
 use crate::util::{path_key, sha256_hex, CmdResult, ErrStr};
 use serde::{Deserialize, Serialize};
@@ -53,7 +52,7 @@ pub struct Meta {
 }
 
 pub(crate) fn dir(app: &AppHandle, project: &str) -> PathBuf {
-    data_dir(app).join("memory").join(&sha256_hex(path_key(project).as_bytes())[..16])
+    crate::settings::category_dir(app, "memory").join(&sha256_hex(path_key(project).as_bytes())[..16])
 }
 fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
@@ -140,6 +139,7 @@ pub async fn mem_record(app: AppHandle, project: String, session: String, entrie
     if project.trim().is_empty() {
         return Ok(());
     }
+    crate::storage::wait_while_moving();
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let d = dir(&app, &project);
     std::fs::create_dir_all(&d).es()?;
@@ -424,7 +424,7 @@ pub async fn mem_forget(app: AppHandle, project: String, id: Option<String>) -> 
     let d = dir(&app, &project);
     match id {
         None => {
-            if d.starts_with(data_dir(&app).join("memory")) {
+            if d.starts_with(crate::settings::category_dir(&app, "memory")) {
                 let _ = std::fs::remove_dir_all(&d);
             }
         }

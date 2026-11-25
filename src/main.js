@@ -3,6 +3,8 @@ import "./styles.css";
 import "./icons.js";
 import { api, listen, IS_TAURI, call, fileSrc } from "./api.js";
 import { initRpc, onRpc } from "./rpc.js";
+// [windows] one window per folder
+import * as win from "./windows.js";
 import {
   initEditor, createState, setState, getView, applyOptions, refreshStateOptions, kindOf, gotoLine,
   showDiagnostics, topVisibleLine, cursorLine, project, scrollToLine,
@@ -61,9 +63,20 @@ const goToDest = (d) => pdfMod?.goToDest(d);
 import { installEngine, initEngineUI, refreshEngineCards, ENGINE_NAMES, ENGINE_SIZES } from "./engines.js";
 import { initOverleaf, refreshOverleafPanel, handleSignInError } from "./overleaf.js";
 import { initHistory, record as historyRecord, refreshHistoryPanel } from "./history.js";
-import { initAI, toggleAIPanel, openActionMenu, fixError, refreshAIContext } from "./ai.js";
-import { initInline } from "./ai-inline.js";
-import { initWriting } from "./writing.js";
+// [windows] the AI panel, inline suggestions and the writing assistant load when first needed (at once in the
+// first window; in an extra window, only when its AI panel opens or one of them is asked for)
+let aiLoading = null;
+const ensureAI = () => (aiLoading ??= Promise.all([import("./ai.js"), import("./ai-inline.js"), import("./writing.js")]).then(([ai, inl, wr]) => {
+  ai.initAI(); inl.initInline(); wr.initWriting();
+  import("./cc-quota.js").then((m) => m.initQuota());
+  if (settings.ccEnabled) import("./cc-sessions.js").then((m) => m.initSessions()); // [chat-core]
+  reapplyExtras();
+  return ai;
+}));
+const toggleAIPanel = async (...a) => (await ensureAI()).toggleAIPanel(...a);
+const openActionMenu = async (...a) => (await ensureAI()).openActionMenu(...a);
+const fixError = async (...a) => (await ensureAI()).fixError(...a);
+const refreshAIContext = () => aiLoading?.then((ai) => ai.refreshAIContext());
 import * as mirror from "./mirror.js";
 import { initUndo, refreshUndo, registerUndo } from "./undo.js";
 import { enter, leave, cascade, settle, tabIn, tabOut, reduced } from "./motion.js";
@@ -91,6 +104,8 @@ const DEFAULTS = {
   skillFolders: [], skillUseOwn: true, skillsDisabled: [], avoidLint: true, aiPanel: false, aiPanelWidth: 380, compileOnOpen: true, shellEscape: false, texBin: "",
   overleafUrl: "https://www.overleaf.com", overleafMode: "auto",
   uiLang: /^vi\b/i.test(navigator.language || "") ? "vi" : "en",
+  streamFx: "smooth",
+  jupyterServers: [], jupyterMap: {}, jupyterDefaultPython: "", jupyterIdleMin: 10, jupyterMaxLines: 200, jupyterTrustHtml: true,
 };
 export let settings = { ...DEFAULTS };
 let saveSettingsTimer;
@@ -100,7 +115,9 @@ export function updateSettings(patch) {
   const asb = document.getElementById("autosave-cb");
   if (asb) asb.checked = !!settings.autoSave;
   clearTimeout(saveSettingsTimer);
-  saveSettingsTimer = setTimeout(() => api.saveSettings(settings).catch((e) => toast(e.message, "err")), 300);
+  // [windows] an extra window keeps its layout (panels, widths, view) out of the shared settings
+  saveSettingsTimer = setTimeout(() => { const a = win.saveArgs(settings); api.saveSettings(a.settings, a.omit).catch((e) => toast(e.message, "err")); }, 300);
+  if (!win.isMain && win.PER_WINDOW.some((k) => k in patch)) win.reportSoon();
 }
 
 function applySettings() {
@@ -322,6 +339,7 @@ function tabMenu(e, t) {
       { label: "Terminal", icon: "code", action: () => call("open_terminal", { dir: dirname(t.path) }) },
     ] },
     t.path && { label: "Reveal in File List", icon: "sidebar", action: () => { if (!settings.sidebar) updateSettings({ sidebar: true }); highlightTree(true); revealInTree(t.path, true); } },
+    t.path && settings.obsidian?.vaultPath && settings.obsidianOpenButton !== false && /\.md$/i.test(t.path) && t.path.replace(/\\/g, "/").toLowerCase().startsWith(settings.obsidian.vaultPath.replace(/\\/g, "/").toLowerCase().replace(/\/?$/, "/")) && { label: "Open in Obsidian", icon: "external", action: () => import("./obsidian.js").then((m) => m.openInObsidian(t.path)) },
     t.path && { label: "Add File to Chat", icon: "sparkles", action: () => import("./ai.js").then((m) => m.addToChat(t.path, false)) },
     t.path && "-",
     t.path && { label: "Copy Path", key: "Shift+Alt+C", icon: "copy", action: () => navigator.clipboard.writeText(t.path).then(() => status("Path copied", "ok")) },
@@ -354,6 +372,7 @@ function renderTabs() {
   }
   $("#welcome").hidden = tabs.length > 0;
   updateTitle();
+  win.reportSoon(); // [windows]
 }
 
 // ---------------- dragging tabs to reorder them ----------------
@@ -430,7 +449,7 @@ function wireTabDrag() {
 
 function updateTitle() {
   const t = activeTab();
-  const title = t ? `${t.dirty ? "● " : ""}${t.name} — Callio` : "Callio";
+  const title = win.titleFor(t, folder);
   document.title = title;
   if (IS_TAURI) call("set_title", { title }).catch(() => {});
 }
@@ -452,6 +471,7 @@ function stashPdfView() {
   else if (pdfShowing.root) texView.set(norm(pdfShowing.root), vs);
 }
 
+const viewersShown = new Set(); // [windows] kinds whose viewer has been shown in this window
 export async function activate(id) {
   if (id === activeId) return;
   if (isReviewing()) {
@@ -497,8 +517,8 @@ export async function activate(id) {
   setView(viewFor(t), false);
   updateCodeTools(t);
   $("#tex-tools").style.visibility = t.kind === "tex" || t.kind === "bib" ? "visible" : "hidden";
-  // the file list shows the active tab's folder: switch to it when the file is outside the open one
-  if (t.path && (!folder || !isInside(t.path, folder))) setFolder(dirname(t.path));
+  // a window with no folder takes its first file's folder; otherwise tabs always belong to the window's own tree
+  if (t.path && !folder) setFolder(dirname(t.path));
   await updateLink(t.path);
   if (!isPdf) applyViewerKind(t);
   $("#fmt-bar").hidden = !(t.kind === "md" || t.kind === "tex");
@@ -507,19 +527,22 @@ export async function activate(id) {
   $("#app").classList.toggle("kind-mermaid", t.kind === "mermaid");
   mermaidBar(t);
   if (t.kind === "tex") await ensureTexPreview(t);
-  if (t.kind !== "doc") import("./word.js").then((m) => m.hideWord());
-  if (t.kind !== "deck") import("./deck.js").then((m) => m.hideDeck());
-  if (t.kind !== "image") { import("./image.js").then((m) => m.hideImage()); import("./viewer.js").then((m) => m.hidePreview()); }
-  if (t.kind !== "media") import("./media.js").then((m) => m.hideMedia());
-  if (t.kind !== "drawio") import("./drawio.js").then((m) => m.hideDrawio());
+  // [windows] a viewer that was never shown needs no hiding, so its module isn't loaded just for that
+  viewersShown.add(t.kind);
+  if (t.kind !== "doc" && viewersShown.has("doc")) import("./word.js").then((m) => m.hideWord());
+  if (t.kind !== "deck" && viewersShown.has("deck")) import("./deck.js").then((m) => m.hideDeck());
+  if (t.kind !== "image" && viewersShown.has("image")) { import("./image.js").then((m) => m.hideImage()); import("./viewer.js").then((m) => m.hidePreview()); }
+  if (t.kind !== "media" && viewersShown.has("media")) import("./media.js").then((m) => m.hideMedia());
+  if (t.kind !== "drawio" && viewersShown.has("drawio")) import("./drawio.js").then((m) => m.hideDrawio());
   settle($("#editor-pane")); settle($("#preview-pane"));
+  const hideSheetIfShown = async () => { if (viewersShown.has("sheet")) (await import("./sheet.js")).hideSheet(); };
   if (t.kind === "sheet") await showSheetTab(t);
-  else if (t.kind === "doc") { (await import("./sheet.js")).hideSheet(); await showWordTab(t); }
-  else if (t.kind === "deck") { (await import("./sheet.js")).hideSheet(); await showDeckTab(t); }
-  else if (t.kind === "image") { (await import("./sheet.js")).hideSheet(); await showImageTab(t); }
-  else if (t.kind === "media") { (await import("./sheet.js")).hideSheet(); await showMediaTab(t); }
-  else if (t.kind === "drawio") { (await import("./sheet.js")).hideSheet(); await showDrawioTab(t); }
-  else if (isPdf) { (await import("./sheet.js")).hideSheet(); await showPdfTab(t); }
+  else if (t.kind === "doc") { await hideSheetIfShown(); await showWordTab(t); }
+  else if (t.kind === "deck") { await hideSheetIfShown(); await showDeckTab(t); }
+  else if (t.kind === "image") { await hideSheetIfShown(); await showImageTab(t); }
+  else if (t.kind === "media") { await hideSheetIfShown(); await showMediaTab(t); }
+  else if (t.kind === "drawio") { await hideSheetIfShown(); await showDrawioTab(t); }
+  else if (isPdf) { await hideSheetIfShown(); await showPdfTab(t); }
   refreshUndo();
 }
 
@@ -663,10 +686,15 @@ async function readTextFile(path, encoding) {
   return { ...r, eol, text: r.text.includes("\r") ? r.text.replace(/\r\n?/g, "\n") : r.text };
 }
 
-export async function openPath(path, line) {
+// files Callio hands to another program instead of opening a tab: never worth a window of their own
+const NOT_A_TAB = /\.(ppt|pot|pps|vsdx?|vsdm|one|onepkg|accdb|mdb|mpp|pub|msg|oft)$/i;
+/** Open a file. `local`: it was already routed to this window (another window or a second launch sent it). */
+export async function openPath(path, line, local) {
   const existing = tabs.find((t) => t.path && norm(t.path) === norm(path));
   if (existing) { await activate(existing.id); if (line) gotoLine(line); return existing; }
   const cat = categoryOf(path);
+  // [windows] a file outside this window's folder opens in another window (or a new one)
+  if (!local && !["archive", "exe", "font", "book"].includes(cat) && !NOT_A_TAB.test(path) && await win.routeElsewhere(path, line)) return null;
   // archives and programs are never read as text: extract / run them (after asking)
   if (cat === "archive") { await openArchive(path); return null; }
   if (cat === "exe") { await confirmLaunch(path); return null; }
@@ -685,7 +713,7 @@ export async function openPath(path, line) {
     return t;
   }
   // other Microsoft Office files open in Office; every other file opens here as plain text
-  if (/\.(ppt|pot|pps|vsdx?|vsdm|one|onepkg|accdb|mdb|mpp|pub|msg|oft)$/i.test(path)) {
+  if (NOT_A_TAB.test(path)) {
     api.openPath(path).catch((e) => toast(e.message, "err"));
     return null;
   }
@@ -909,6 +937,7 @@ export function setFolder(f) {
   refreshProjectIndex();
   updateLink(f);
   window.dispatchEvent(new CustomEvent("callio-folder", { detail: f }));
+  updateTitle(); // [windows] the title carries the folder
 }
 let treeBusy = null, treeAgain = false;
 /** Re-list the open folders and redraw the tree (selection, scroll and focus are kept). */
@@ -1547,7 +1576,7 @@ function onDocChanged(immediate = false) {
   }
   clearTimeout(outlineTimer);
   if (!VIEW_KINDS.has(t.kind)) outlineTimer = setTimeout(renderOutline, immediate ? 0 : 400);
-  if (t.kind !== "sheet") import("./sheet.js").then((m) => m.hideSheet());
+  if (t.kind !== "sheet" && viewersShown.has("sheet")) import("./sheet.js").then((m) => m.hideSheet());
 }
 // ---------------- CSV/TSV tables, JSON/XML/YAML trees ----------------
 let csvCtl = null, treeCtl = null;
@@ -1792,7 +1821,7 @@ async function showNotebook(t) {
   if (nbShowing?.tab === t) return nbShowing.ctl.update(text);
   nbShowing?.ctl.flush();
   const ctl = nb.mountNotebook($("#nb-view"), text, {
-    dir: t.path ? dirname(t.path) : "",
+    dir: t.path ? dirname(t.path) : "", path: t.path || "", key: t.path || `tab:${t.id}`, getSettings: () => settings,
     onChange: (next) => {
       if (activeTab() !== t) {
         // committed after a tab switch: write it into that tab's own stored state
@@ -2504,6 +2533,7 @@ const toggleNewMenu = (focus) => toggleMenu($("#btn-new"), focus);
 const MENU_ACTIONS = {
   "open-file": () => cmdOpen(),
   "open-folder": () => cmdFolder(),
+  "restore-drafts": () => import("./restore-ui.js").then((m) => m.openDraftsList()),
   save: () => cmdSave(false),
   "save-as": () => cmdSave(true),
   "save-all": async () => { const n = tabs.filter((x) => x.dirty).length; await saveAll(); status(n ? `Saved ${n} file${n > 1 ? "s" : ""}` : "Everything is saved", "ok"); },
@@ -2624,6 +2654,8 @@ document.addEventListener("keydown", (e) => {
   if (k === "n") return run(() => newFile("md"));
   if (k === "w") return run(() => activeId && closeTab(activeId));
   if (k === "tab") return run(() => nextTab(e.shiftKey ? -1 : 1));
+  if (k === "enter" && e.target.closest?.("#nb-view")) return; // in a notebook Ctrl+Enter runs the cell
+  if (k === "enter" && e.target?.id === "ai-text") return; // [chat-core] Ctrl+Enter in the chat box = "Interrupt & send"
   if (k === "enter") return run(() => compile());
   if (k === "\\") return run(() => updateSettings({ sidebar: !settings.sidebar }));
   if (k === ",") return run(openSettings);
@@ -3000,6 +3032,7 @@ import { openSettings, initSettings } from "./settings.js";
 // ---------------- boot ----------------
 async function boot() {
   try { const s = await api.loadSettings(); if (s) settings = { ...DEFAULTS, ...s }; } catch {}
+  settings = await win.bootSettings(settings); // [windows] an extra window starts with its own layout
   // 0.5: zooming out switches page layouts automatically — make it the default once
   if (!settings.layoutAutoV) { settings = { ...settings, pdfLayout: settings.pdfLayout === "continuous" ? "auto" : settings.pdfLayout, layoutAutoV: 1 }; }
   initEditor($("#editor"), {
@@ -3014,10 +3047,39 @@ async function boot() {
   initFormatBar();
   if (import.meta.env?.DEV) window.__text = () => getView().state.doc.toString();
   if (import.meta.env?.DEV) window.__wys = () => wys;
-  initAI();
-  initInline();
-  initWriting();
-  import("./cc-quota.js").then((m) => m.initQuota());
+  if (import.meta.env?.DEV) import(/* @vite-ignore */ import.meta.url).then((m) => { window.__main = m; }); // tests: this very module (not a second copy)
+  // [windows] AI: at once in the first window and in any window that starts with its AI panel open
+  if (win.isMain || settings.aiPanel) await ensureAI();
+  // [chat-core] init
+  // (Claude Code sessions start with the AI panel's modules — see ensureAI — so an extra window
+  // that never opens the AI panel doesn't load them)
+
+  // [chat-ui] init
+  import("./chat-view.js").then((m) => m.initChatView());
+  import("./restore-ui.js").then((m) => m.initRestoreUI());
+
+  // [memory] init
+  import("./memory-notes.js").then((m) => m.initMemoryNotes());
+  import("./storage.js").then((m) => m.initStorage());
+
+  // [windows] init
+  win.initWindows({
+    folder: () => folder,
+    files: () => tabs.filter((t) => t.path).map((t) => t.path),
+    hasTab: (p) => tabs.some((t) => t.path && norm(t.path) === norm(p)),
+    settings: () => settings,
+    openLocal: (p, line) => openPath(p, line, true),
+    applyReloaded: (fn) => { settings = fn(settings); applySettings(); reapplyExtras(); },
+    toast,
+  });
+
+  // [jupyter] init
+  for (const n of ["nb_list_cells", "nb_read_cell", "nb_edit_cell", "nb_insert_cell", "nb_run_cell", "nb_kernel_state"]) onRpc(n, async (p) => (await import("./jupyter.js")).rpc(n, p));
+
+  // [wsl] init
+
+  // [ssh] init
+
   initUndo();
   initHistory({
     activeTab,
@@ -3144,9 +3206,12 @@ async function boot() {
 
   // backend events
   listen("open-paths", (paths) => paths.forEach((p) => openPath(p)));
+  // [windows] an intent to use the AI before it was loaded (extra windows): load it, then do it
+  document.addEventListener("click", (e) => { if (!aiLoading && e.target.closest("#btn-ai, #btn-write, #ai-sel-btn")) { e.stopImmediatePropagation(); e.preventDefault(); const id = e.target.closest("button").id; ensureAI().then(() => $("#" + id)?.click()); } }, true);
   // a newer Callio was started from another folder while this (older) one runs
   listen("newer-version", async ({ exe, version, args }) => {
     const r = await ask({ title: `Callio ${version} is available`, text: `You started a newer Callio (${version}) from:\n${exe}\n\nSwitch to it now? This window closes (you'll be asked about unsaved files first).`, buttons: [{ label: "Keep using this one", value: "keep" }, { label: `Switch to ${version}`, value: "switch", primary: true }] });
+    if (r === "switch" && await win.otherWindows()) { toast("Close the other Callio windows, then start the new version again.", "warn", 7000); return; } // [windows]
     if (r !== "switch") {
       const paths = (args || []).filter((a) => !a.startsWith("--"));
       for (const p of paths) await openPath(p).catch(() => {});
@@ -3197,15 +3262,22 @@ async function boot() {
       if (!r) return;
       if (r === "save") { for (const t of dirty) if (!(await saveTab(t))) return; }
     }
-    call("exit_app");
+    // a normal close: nothing to restore next time for this window (its drafts and tab list go);
+    // the last window's exit_app also removes the unclean-exit marker
+    try { await (await import("./drafts.js")).clearWindow(); } catch {}
+    win.closeThisWindow(); // [windows] this window only; the last one quits
   });
 
   // show the (hidden) window as soon as the first frame is painted
   performance.mark("callio-init-done");
   requestAnimationFrame(() => requestAnimationFrame(() => { if (IS_TAURI) call("show_window").catch(() => {}); }));
-  const paths = await api.startupPaths().catch(() => []);
+  const handed = await api.startupPaths().catch(() => []);
+  // [windows] an extra window starts in its own folder, with the file it was made for
+  if (!win.isMain) { const f = win.winQuery.folder || (win.winQuery.open && dirname(win.winQuery.open)); if (f) setFolder(f); }
+  const paths = win.startFiles(handed);
   for (const p of paths) await openPath(p);
-  if (!paths.length && !IS_TAURI) { setFolder("C:/demo"); await openPath("C:/demo/README.md"); }
+  if (!paths.length && win.isMain && !IS_TAURI) { setFolder("C:/demo"); await openPath("C:/demo/README.md"); }
+  win.reportNow();
 }
 
 boot();

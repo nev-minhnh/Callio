@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.18.0
+
+This release brings together what was planned as 0.16 (chat), 0.16.1 (memory and data settings), 0.17 (windows) and 0.18 (Jupyter).
+
+### Claude Code chat: live sessions
+- Claude Code chats are now sessions in tabs: run several at once, each with its own conversation, status dot and a "Cần bạn" / "Needs you" badge when it waits for an approval.
+- The text box no longer locks while Claude Code works. Enter queues your message ("Send next"; the model reads it after the step it is doing), Ctrl+Enter stops the current step and sends it ("Interrupt & send"), Esc or Stop ends the turn. A queued message shows as a dashed row you can take back with ✕ until Claude Code has read it.
+- New activity strip above the input (and an optional column beside the chat, switch with ⇔): what the model is doing now, the to-do list, running time, tokens, and every subagent with its own live log and inline Allow / Deny.
+- Sessions list with groups (Needs you / Running / Recently finished), a toast when a background session needs you, and a quota refresh after every turn.
+- Sessions survive a power cut: after an unexpected close Callio offers to bring them back; each shows a "Tiếp tục" / "Continue" button and nothing runs until you press it.
+- Settings → AI → Claude Code: sessions at once (1–8), close idle sessions after N minutes, activity layout (strip or column).
+
+### Chat: fast, follows the answer, smooth text, nothing lost after a crash
+- Chat: long chats open instantly; old messages leave the page (placeholders) and come back from an HTML cache, with no jumps while scrolling.
+- Chat: auto-scroll follows the answer only while you are at the bottom; any scroll up (wheel, keys, touch, drag, selection) stops it, and a round ↓ button (with a count of new messages) brings you back.
+- Chat: new smoother streaming text effect (words fade in with a soft blur); Settings > Interface > Text effect: Smooth / Fast / Off.
+- Chat: fixed the interface-translation pass walking the whole chat on every streamed token.
+- Restore: after an unexpected exit Callio offers to reopen the previous tabs, with unsaved changes kept as drafts (Open > Restore drafts… lists them; drafts older than 7 days are deleted).
+
+### AI memory and Obsidian
+- **AI memory notes: MEMORY.md or an Obsidian vault.** Besides remembering every conversation, Callio now keeps one short, curated note per project with six fixed sections: *Goals*, *Decisions*, *Conventions*, *In progress*, *Open questions* and *Remember*. It lives in Callio's own data folder (private, so it never ends up in your Git history) or, if you prefer, in `<project>/MEMORY.md` — Settings → **AI memory** → *Where MEMORY.md is kept*.
+  - The note (cut to about 4,000 characters, newest lines first) is added to the system prompt of every new session — in the appended system prompt for Claude Code, so it survives context compaction — and to the system message of API chats.
+  - When a Claude Code session ends, a small model proposes the new note. You see a diff and accept or reject it; nothing is written without that. Accepted changes save the previous version first (it is in the file's history) and `/memory undo` takes the last update back. Choose *Only when I type /memory update* in Settings → AI memory to do it by hand; the Project memory window has an *Update the memory notes…* button too.
+  - `/remember …` and the pin button also add the line to the *Remember* section (they are explicit, so there is no review).
+  - If the note was changed on disk meanwhile (say, in Obsidian), Callio never overwrites it: you get the diff against what is there now.
+- **Obsidian vault as the AI's memory.** Settings → AI memory → *Obsidian vault* keeps a project note in `Callio/Projects/` and one note per session in `Callio/Sessions/` (`YYYY-MM-DD <title>.md`, with the summary, files changed, decisions and a `[[Project]]` link); verbatim transcripts never go into the vault. If Callio was in Vietnamese when you set the vault up, the folders are `Dự án` and `Phiên`.
+  - Claude Code gets three read-only tools, `memory_note`, `vault_search` and `vault_read`, and recall also searches the vault — only in the folders you allowed.
+  - **What Callio may do is yours to choose.** For a vault you already have: *Read & search* — selected folders (default: `Callio/` and the ones you pick) or the whole vault; *Write* — only `Callio/` (default), selected folders, or nothing; *CLI* — search/read/open (default), also create notes and edit properties, or everything including running JavaScript (with a warning). The limits are enforced in Callio's backend, not only hidden in the settings; the `.obsidian` folder is always off limits.
+  - **Obsidian found on this PC?** Callio fills in the install path and version, lists your vaults (the last opened is preselected), guesses the sync tool (OneDrive, Dropbox, Google Drive, iCloud, Git, Obsidian Sync) and shows whether the Obsidian command line is switched on — only when you press *Check*, because the first CLI command starts Obsidian.
+  - **Not installed?** *Install Obsidian* downloads the official installer from Obsidian's GitHub, checks its checksum and signature, installs it for you only (no admin rights), creates a vault (default `D:\Notes\Callio Notes`, or Documents when there is no D:), registers it with Obsidian and walks you through the one switch for the command line. A vault Callio creates gets full permissions; every AI edit still saves the previous version and can be undone, and you can lower the permissions any time.
+  - *Open in Obsidian* in the tab menu of notes inside the vault (switch it off in Settings → AI memory).
+
+### Data storage
+- **Move Callio's data to another drive.** Settings → **Data storage** shows where the data is and how big each part is — paper library, versions & backups, AI memory & session journals, unsaved drafts, citation styles, installed tools, skills & Claude Code copies — with a tick box per row and *Select all*. *Move to…* checks the free space, pauses what Callio writes (and refuses while a Claude Code session is running), copies with a progress bar, verifies every file (count, size, sha256), switches over and restarts. If anything fails Callio keeps using the old place and says why. The old copies are deleted only after you agree, on the next start.
+  - A `data` folder next to `Callio.exe` makes Callio portable; the first portable start offers to move your data there.
+  - If the data drive is missing at start (unplugged, BitLocker locked) Callio says so and offers *Try again*, *Choose another place* or *Open without my data* — it never creates an empty library somewhere else.
+  - Stays on C: the location file, saved keys (Windows Credential Manager) and Claude Code's own data. The web view cache can't be moved.
+
+### Windows
+- **One window per folder.** Every Callio window is a session with its own folder. A file that is not inside the window's folder now opens in another window instead of changing this window's file list: if another window already has the file open, that window comes to the front on that tab; else if another window's folder holds it, it opens there; else a **new window** opens with the file's folder. This covers everything that opens a file — File ▸ Open, the recent list, drag and drop, links, search results, the AI chat's file links, Compare, Explorer's *Open with* and a second launch. Files inside the window's folder (or any file, in a window with no folder yet) open where you are. Open Folder still replaces the current window's folder.
+  - Clicking a tab no longer switches the file list to that file's folder (0.14.1): a window's tabs always belong to its own list.
+  - A new window starts with the file list hidden behind the rainbow line at the left edge (move the mouse there to show it; pin to keep it) and the AI panel closed. Panels, their widths and the view mode are **per window**: changing them in one window never changes another. Every other setting applies live in all windows.
+  - The title bar reads "file — folder — Callio", so windows can be told apart in Alt+Tab. Closing a window with unsaved files asks first; closing the last window quits; closing the first window while others are open keeps Callio running. A second launch hands its files to the right window.
+  - Lighter windows: in a new window the AI panel, writing assistant and inline suggestions load only when you open them, viewers are loaded only for kinds of files you open, and a window minimised for 30 seconds asks WebView2 to give memory back (restored the moment you return).
+  - After Callio closes unexpectedly, *Reopen the previous session?* also brings back your windows (folder, size, position, panels) — each one restores its own tabs.
+
+### Jupyter notebooks
+- **Run notebooks.** `.ipynb` cells now run: Shift+Enter, Ctrl+Enter, Run all, interrupt and restart, with live streaming output, rich results (images, HTML, LaTeX, tables, errors with colour), progress bars, `input()` prompts, Tab completion and Shift+Tab help. Outputs are saved into the notebook like Jupyter does.
+- **Local kernels with no setup in Callio.** Callio finds your Python (.venv, conda, the `py` launcher, PATH), starts a hidden Jupyter server on demand, and stops it when idle. Missing `jupyter_server` / `ipykernel` can be installed from the kernel picker. Callio does not bundle Python.
+- **Remote Jupyter servers.** Connect by URL and token (the token is kept in Windows Credential Manager). Self-signed HTTPS servers can be trusted by pinning their certificate. Attach to running kernels or start new ones.
+- **Claude Code can use the notebook.** New tools list, read, edit, insert and run cells; running asks for permission first.
+- **AI in notebooks.** Ask AI about a cell (it sees the last error), and apply suggested cell edits through a reviewable diff with undo.
+- **Settings.** New Jupyter group: default Python, idle shutdown, output line limit, trust HTML output.
+
 ## 0.15.0
 
 - **Claude plan usage in the AI panel.** With Claude Code turned on, the row under the chat toolbar (next to the conversation's name) shows the **5-hour** limit, the **weekly** limit and the per-model weekly limits (**Fable**…), each as a small meter with its percentage — green, amber from 70 %, red from 90 %. Hover for when each one resets; click to read them again.

@@ -14,6 +14,8 @@ function showSection(sec) {
   if (sec === "ai") import("./ai.js").then((m) => m.renderAISettings());
   if (sec === "library") import("./library.js").then((m) => m.renderLibrarySettings());
   if (sec === "ocr") import("./ocr.js").then((m) => m.renderOcrSettings($("#ocr-settings")));
+  if (sec === "memory") import("./obsidian.js").then((m) => m.renderMemorySettings($("#mem-settings")));
+  if (sec === "storage") import("./storage.js").then((m) => m.renderStorageSettings($("#storage-settings")));
 }
 
 // ---------------- one look for every page ----------------

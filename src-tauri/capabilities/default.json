@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Main window: core events only. File, dialog and shell access goes through Callio's own commands.",
-  "windows": ["main"],
+  "description": "Main and extra editor windows (w-*): core events only. File, dialog and shell access goes through Callio's own commands.",
+  "windows": ["main", "w-*"],
   "permissions": ["core:default"]
 }

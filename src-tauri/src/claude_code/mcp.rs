@@ -25,7 +25,18 @@ pub type Asker = Arc<dyn Fn(String, Value, Duration) -> Pin<Box<dyn Future<Outpu
 pub fn window_asker(app: AppHandle) -> Asker {
     Arc::new(move |m, p, t| {
         let app = app.clone();
-        Box::pin(async move { ask_window(&app, &m, p, t).await })
+        Box::pin(async move {
+            // a permission question from a session: that session shows "needs you" while it is open
+            let session = (m == "permission").then(|| p["session"].as_str().map(String::from)).flatten();
+            if let Some(h) = &session {
+                super::session::perm_delta(&app, h, 1);
+            }
+            let r = ask_window(&app, &m, p, t).await;
+            if let Some(h) = &session {
+                super::session::perm_delta(&app, h, -1);
+            }
+            r
+        })
     })
 }
 
@@ -69,12 +80,18 @@ async fn ask_window(app: &AppHandle, method: &str, params: Value, timeout: Durat
                 m.remove(&self.rpc);
             }
             if !self.answered {
-                let _ = self.app.emit("cc-rpc-cancel", json!({"rpc": self.rpc}));
+                let _ = self.app.emit("cc-rpc-cancel", json!({"rpc": self.rpc})); // (any window may hold the card)
             }
         }
     }
     let mut g = Guard { app, rpc, answered: false };
-    let _ = app.emit("cc-rpc", json!({"rpc": rpc, "method": method, "params": params}));
+    // a session's question goes to the window that owns the session; anything else to the window being used
+    let owner = params["session"].as_str().and_then(crate::claude_code::session::window_of);
+    let msg = json!({"rpc": rpc, "method": method, "params": params});
+    match owner {
+        Some(w) => { let _ = app.emit_to(w, "cc-rpc", msg); }
+        None => crate::windows::emit_app(app, "cc-rpc", msg),
+    }
     let r = tokio::time::timeout(timeout, rx).await.ok().and_then(|r| r.ok());
     g.answered = r.is_some();
     r
@@ -152,7 +169,9 @@ async fn serve(sock: TcpStream, app: Asker, token: String) -> anyhow::Result<()>
             // keep it alive with comments so no HTTP timeout cuts it off.
             w.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n").await?;
             w.flush().await?;
-            let fut = call_tool(&app, &msg["params"]);
+            // /mcp/<session handle>: which Claude Code session is asking (None for the old per-turn runs)
+            let session = req.path.strip_prefix("/mcp/").map(|h| h.split(['?', '/']).next().unwrap_or("").to_string()).filter(|h| !h.is_empty());
+            let fut = call_tool(&app, &msg["params"], session.as_deref());
             tokio::pin!(fut);
             let mut tick = tokio::time::interval(Duration::from_secs(15));
             tick.tick().await;
@@ -195,6 +214,7 @@ fn tools() -> Value {
     let mut v = base_tools();
     if let Some(a) = v.as_array_mut() {
         a.extend(crate::ai::office_tools::mcp_defs());
+        a.extend(crate::mcp_ext::defs());
     }
     v
 }
@@ -224,7 +244,7 @@ fn base_tools() -> Value {
     ])
 }
 
-fn text_result(v: Value, is_error: bool) -> Value {
+pub(crate) fn text_result(v: Value, is_error: bool) -> Value {
     // {"text": …, "images": [{"data": base64, "mimeType": …}]} → text + image content
     if let Some(imgs) = v.get("images").and_then(|i| i.as_array()) {
         let mut content = vec![json!({"type": "text", "text": v["text"].as_str().unwrap_or("")})];
@@ -240,7 +260,7 @@ fn text_result(v: Value, is_error: bool) -> Value {
     json!({"content": [{"type": "text", "text": text}], "isError": is_error})
 }
 
-async fn call_tool(app: &Asker, params: &Value) -> Value {
+async fn call_tool(app: &Asker, params: &Value, session: Option<&str>) -> Value {
     let name = params["name"].as_str().unwrap_or("");
     let args = params.get("arguments").cloned().unwrap_or(json!({}));
     match name {
@@ -251,7 +271,7 @@ async fn call_tool(app: &Asker, params: &Value) -> Value {
             let decision = if tool.starts_with("mcp__callio__") {
                 json!({"behavior": "allow", "updatedInput": input})
             } else {
-                match app("permission".into(), json!({"toolName": tool, "input": input}), Duration::from_secs(3600)).await {
+                match app("permission".into(), json!({"toolName": tool, "input": input, "session": session, "toolUseId": args["tool_use_id"]}), Duration::from_secs(3600)).await {
                     Some(a) if a["allow"].as_bool() == Some(true) => json!({"behavior": "allow", "updatedInput": input}),
                     Some(a) => json!({"behavior": "deny", "message": a["message"].as_str().filter(|m| !m.is_empty()).map(|m| format!("The author declined: {m}")).unwrap_or_else(|| "The author declined this action.".into())}),
                     None => json!({"behavior": "deny", "message": "No answer from the author."}),
@@ -282,6 +302,7 @@ async fn call_tool(app: &Asker, params: &Value) -> Value {
                 None => text_result(Value::String("Callio did not answer (is the window open?)".into()), true),
             }
         }
+        n if crate::mcp_ext::owns(n) => crate::mcp_ext::call(n, &args).await,
         n if crate::ai::office_tools::NAMES.contains(&n) => match app(n.to_string(), args, Duration::from_secs(600)).await {
             Some(v) => {
                 let err = v.get("error").is_some();

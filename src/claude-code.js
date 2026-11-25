@@ -7,7 +7,6 @@ import { unifiedMergeView } from "@codemirror/merge";
 import { api, listen } from "./api.js";
 import { settings, updateSettings, toast, ask, activeTab, getTabs, getLastCompile, compile, openPath, basename, dirname, folder, saveAll, reloadFromDisk, refreshTree } from "./main.js";
 import { getSelectionInfo } from "./editor.js";
-import { createStreamer } from "./stream.js";
 import { showDiffDialog } from "./history.js";
 import { onRpc, onRpcCancel, initRpc, SELF } from "./rpc.js";
 
@@ -32,13 +31,16 @@ export async function ccStatus(refresh = false) {
 
 // ---------------- questions from Claude Code (MCP server → window) ----------------
 let activeRun = null; // { el, toolsEl, autoEdits }
-const cards = new Map();
+export const cards = new Map();
 
-onRpc("permission", (params, rpc) => { permissionCard(rpc, params); return SELF; });
+// [chat-core] a question that comes with a session handle belongs to that session's tab (cc-sessions.js)
+let sessionHooks = null;
+export function setSessionHooks(h) { sessionHooks = h; }
+onRpc("permission", (params, rpc) => { if (params.session && sessionHooks) { sessionHooks.permission(params, rpc); return SELF; } permissionCard(rpc, params); return SELF; });
 onRpc("editor_state", () => editorState());
 onRpc("open_file", async (params) => { await openPath(params.path, params.line || undefined); return `Opened ${params.path}`; });
 onRpc("compile", () => compileForClaude());
-onRpcCancel((rpc) => { const c = cards.get(rpc); if (c) { c.classList.add("answered"); c.querySelector(".cc-perm-actions").innerHTML = "<small>No answer — declined</small>"; cards.delete(rpc); } });
+onRpcCancel((rpc) => { sessionHooks?.answered?.(rpc, null); const c = cards.get(rpc); if (c) { c.classList.add("answered"); c.querySelector(".cc-perm-actions").innerHTML = "<small>No answer — declined</small>"; cards.delete(rpc); } });
 
 function editorState() {
   const t = activeTab();
@@ -79,8 +81,8 @@ async function compileForClaude() {
   };
 }
 
-const EDIT_TOOLS = ["Edit", "MultiEdit", "Write", "NotebookEdit"];
-function toolTitle(name, input = {}) {
+export const EDIT_TOOLS = ["Edit", "MultiEdit", "Write", "NotebookEdit"];
+export function toolTitle(name, input = {}) {
   const f = input.file_path || input.notebook_path || input.path;
   switch (name) {
     case "Edit": case "MultiEdit": return ["✏️", `Edit ${basename(f)}`];
@@ -112,12 +114,16 @@ function diffEditor(parent, before, after) {
   });
 }
 
-async function permissionCard(rpc, { toolName, input }) {
+/**
+ * The permission card. `run` ({cwd, autoEdits}) and `hostEl` (where the card goes) are given by a
+ * session tab; the old per-turn runs use the active run. Returns the card (null when auto-allowed).
+ */
+export async function permissionCard(rpc, { toolName, input }, run = activeRun, hostEl = null, focus = true) {
   // "Allow all edits" earlier in this answer — only for files inside the project folder
   const target = input.file_path || input.notebook_path || "";
-  const inProject = !!target && !!activeRun?.cwd && norm(target).startsWith(norm(activeRun.cwd).replace(/\/?$/, "/")) && !/(^|\/)\.\.(\/|$)/.test(norm(target));
-  if (activeRun?.autoEdits && EDIT_TOOLS.includes(toolName) && inProject) return api.ccReply(rpc, { allow: true });
-  const host = activeRun?.el.querySelector(".ai-tools") || $("#ai-messages");
+  const inProject = !!target && !!run?.cwd && norm(target).startsWith(norm(run.cwd).replace(/\/?$/, "/")) && !/(^|\/)\.\.(\/|$)/.test(norm(target));
+  if (run?.autoEdits && EDIT_TOOLS.includes(toolName) && inProject) { api.ccReply(rpc, { allow: true }); return null; }
+  const host = hostEl || run?.el?.querySelector(".ai-tools") || $("#ai-messages");
   const card = document.createElement("div");
   card.className = "cc-perm";
   const [ico, title] = toolTitle(toolName, input);
@@ -148,21 +154,22 @@ async function permissionCard(rpc, { toolName, input }) {
   const done = (value, label) => {
     cards.delete(rpc);
     views.forEach((v) => v.destroy());
+    sessionHooks?.answered?.(rpc, value);
     card.classList.add("answered");
     card.querySelector(".cc-perm-actions").innerHTML = `<small>${esc(label)}</small>`;
     card.querySelector(".cc-perm-body").hidden = true;
     api.ccReply(rpc, value);
   };
   card.querySelector(".cc-allow").onclick = () => done({ allow: true }, "Allowed");
-  card.querySelector(".cc-allow-all")?.addEventListener("click", () => { if (activeRun) activeRun.autoEdits = true; done({ allow: true }, "Allowed (and further edits in this answer)"); });
+  card.querySelector(".cc-allow-all")?.addEventListener("click", () => { if (run) run.autoEdits = true; done({ allow: true }, "Allowed (and further edits in this answer)"); });
   card.querySelector(".cc-deny").onclick = () => done({ allow: false, message: card.querySelector(".cc-deny-why").value.trim() }, "Denied");
   card.querySelector(".cc-deny-why").addEventListener("keydown", (e) => { if (e.key === "Enter") card.querySelector(".cc-deny").click(); });
   cards.set(rpc, card);
   host.appendChild(card);
-  $("#ai-messages").scrollTop = $("#ai-messages").scrollHeight;
-  card.querySelector(".cc-allow").focus({ preventScroll: true });
+  if (focus) card.querySelector(".cc-allow").focus({ preventScroll: true });
   // bring the window's attention to the question
   if (document.hidden) toast("Claude Code is waiting for your answer", "", 5000);
+  return card;
 }
 
 let listening = false;
@@ -180,7 +187,7 @@ export function projectDir() {
   return folder || (t?.path ? dirname(t.path) : null);
 }
 
-function contextPreamble(ctx) {
+export function contextPreamble(ctx) {
   const t = activeTab();
   const parts = [];
   if (t?.path) {
@@ -194,7 +201,7 @@ function contextPreamble(ctx) {
   return parts.length ? `<callio-context>\n${parts.join("\n\n")}\n</callio-context>\n\n` : "";
 }
 
-const SYSTEM = `You are working inside Callio, the LaTeX/Markdown editor the author is using for academic writing, on their own project (the working directory).
+export const SYSTEM = `You are working inside Callio, the LaTeX/Markdown editor the author is using for academic writing, on their own project (the working directory).
 - Edit files directly with your tools. Callio saves a version of every file before your turn and shows the author a diff with Undo afterwards.
 - After changing .tex or .bib files, use the mcp__callio__compile tool to compile in Callio and fix any errors you caused.
 - Use mcp__callio__editor_state when you need to know what the author is looking at.
@@ -203,118 +210,13 @@ const SYSTEM = `You are working inside Callio, the LaTeX/Markdown editor the aut
 - Never invent references, DOIs, quotes, numbers or results. Only cite BibTeX keys that exist in the project's .bib files; if a new reference is needed, find it on the web, verify it, and say clearly when something is unverified.
 - Preserve LaTeX commands, labels, citations and math unless asked to change them. Keep answers concise.`;
 
-/**
- * Run one Claude Code turn in the chat. `ui` gives the chat helpers from ai.js.
- * Returns the final text (or throws).
- */
-export async function runTurn(text, ui) {
-  const st = await ccStatus();
-  if (!st.installed) throw new Error("CLAUDE_MISSING");
-  const cwd = projectDir();
-  if (!cwd) throw new Error("Open a project folder or a saved file first — Claude Code works inside a folder.");
-  await ensureListeners();
-  // Claude Code reads files from disk: save open edits first (each save keeps a version)
-  await saveAll((t) => !!t.path && norm(t.path).startsWith(norm(cwd)));
-
-  const mv = settings.aiModel_chat || "claudecode|default";
-  const model = mv.split("|")[1];
-  const id = `cc-${Date.now()}`;
-  const el = ui.addMsg("assistant cc", `<div class="cc-badge">Claude Code${model !== "default" ? ` · ${esc(model)}` : ""}${settings.aiEffort && !/haiku/.test(model) ? ` · effort ${esc({ xhigh: "extra" }[settings.aiEffort] || settings.aiEffort)}` : ""} · ${esc(basename(cwd))}</div><div class="ai-tools"></div><div class="ai-body markdown-body"><span class="ai-typing">●●●</span></div><div class="cc-changes"></div>`);
-  const toolsEl = el.querySelector(".ai-tools"), body = el.querySelector(".ai-body"), changesEl = el.querySelector(".cc-changes");
-  activeRun = { el, autoEdits: false, id, cwd };
-  ui.setStop(() => api.ccCancel(id));
-
-  let full = "", streamed = false;
-  const think = ui.thinkBox(el);
-  const toolEls = new Map(), toolFiles = new Map(), liveTags = new Map();
-  const stream = createStreamer(body, ui.renderMd, document.querySelector("#ai-messages"));
-  const render = () => stream.set(full);
-  runHandlers.set(id, (ev) => {
-    if (ev.t === "text") { think.answer(); streamed = true; full += ev.text; render(); }
-    else if (ev.t === "thinking") think.add(ev.text || "");
-    else if (ev.t === "message_start") { if (full && !full.endsWith("\n\n")) full += "\n\n"; }
-    else if (ev.t === "assistant") {
-      if (!streamed && ev.text && !ev.sub) { full += (full ? "\n\n" : "") + ev.text; render(); }
-      for (const tl of ev.tools || []) {
-        const [ico, title] = toolTitle(tl.name, tl.input);
-        const chip = document.createElement("div");
-        chip.className = "tool-chip" + (ev.sub ? " sub" : "");
-        chip.innerHTML = `<span class="tc-state">⏳</span> ${ico} <span class="tc-title"></span>`;
-        chip.querySelector(".tc-title").textContent = title;
-        chip.title = JSON.stringify(tl.input, null, 1).slice(0, 1500);
-        toolsEl.appendChild(chip);
-        toolEls.set(tl.id, chip);
-        const f = tl.input?.file_path || tl.input?.notebook_path;
-        if (f && EDIT_TOOLS.includes(tl.name)) toolFiles.set(tl.id, f);
-        const seen = f || tl.input?.path;
-        if (seen && (EDIT_TOOLS.includes(tl.name) || ["Read", "mcp__callio__read_pdf", "mcp__callio__view_pdf_page", "mcp__callio__open_file"].includes(tl.name))) { ui.fileTag?.(seen, EDIT_TOOLS.includes(tl.name) ? "edit" : "read", true); liveTags.set(tl.id, seen); }
-      }
-      ui.scroll();
-    } else if (ev.t === "tool_results") {
-      for (const r of ev.results) {
-        if (liveTags.has(r.id)) { const p = liveTags.get(r.id); liveTags.delete(r.id); ui.fileTag?.(p, toolFiles.has(r.id) ? "edit" : "read", false); }
-        const chip = toolEls.get(r.id);
-        if (chip) {
-          chip.querySelector(".tc-state").textContent = r.isError ? "✗" : "✓";
-          if (r.isError) { chip.classList.add("err"); chip.title = r.text; }
-        }
-        // show Claude's edit in the open tab right away
-        if (!r.isError && toolFiles.has(r.id)) reloadFromDisk([toolFiles.get(r.id)], false, "Claude Code edit");
-      }
-    } else if (ev.t === "init") {
-      const callio = (ev.mcp || []).find((s) => s.name === "callio");
-      if (callio && callio.status && callio.status !== "connected") toolsEl.insertAdjacentHTML("beforeend", `<div class="tool-chip err">Callio tools unavailable (${esc(callio.status)})</div>`);
-      // auto mode needs a recent Claude Code and model: otherwise Claude Code falls back to asking
-      const asked = settings.ccPermissionMode || "default";
-      if (asked === "auto" && ev.permissionMode && ev.permissionMode !== "auto") toolsEl.insertAdjacentHTML("beforeend", `<div class="tool-chip warn" title="Auto mode needs Claude Code 2.1.233+ on Windows and a supported model (e.g. Opus 4.6+, Sonnet 4.6+). Update Claude Code, pick another model, or choose Full access.">⚡ Auto mode isn't available here — Claude Code will ask instead</div>`);
-    }
-  });
-
-  const skills = await ui.skillsForClaude();
-  const label = (ui.shown || text).replace(/\s+/g, " ").slice(0, 50);
-  let res;
-  try {
-    res = await api.ccRun({
-      id, prompt: contextPreamble(ui.ctx) + text, sessionId: ui.session.id || null, model,
-      cwd, permissionMode: settings.ccPermissionMode || "default", systemAppend: SYSTEM + skills + (ui.memory || ""), label,
-      effort: /haiku/.test(model) ? null : (settings.aiEffort || null), thinking: settings.aiThinking !== false,
-      web: settings.aiWeb === false ? "off" : (settings.aiSearchEngine && settings.aiSearchEngine !== "auto" ? settings.aiSearchEngine : null),
-    });
-  } finally {
-    runHandlers.delete(id);
-    activeRun = null;
-    for (const [rpc, c] of cards) if (el.contains(c)) { c.remove(); cards.delete(rpc); }
-    // the answer used some of the plan: read the real numbers again
-    import("./cc-quota.js").then((m) => m.refreshQuota(true));
-  }
-  ui.result = res;
-  if (res.sessionId) ui.session.id = res.sessionId;
-  if (!full && res.result) full = res.result;
-  if (res.cancelled) full += (full ? "\n\n" : "") + "_Stopped._";
-  if (full) { stream.set(full); await stream.finish(); }
-  stream.stop();
-  await (ui.settleMd || ui.renderMd)(body, full || (res.isError ? "" : "_(done)_"), stream.stick);
-  think.done();
-  if (res.isError && !res.cancelled) body.insertAdjacentHTML("beforeend", errorHtml(res.error));
-  renderChanges(changesEl, res.changed || [], cwd);
-  if (res.snapshotPartial && (res.changed || []).length === 0) changesEl.hidden = true;
-  if (res.snapshotPartial) changesEl.insertAdjacentHTML("beforeend", `<div class="note">This project is large: Callio could only keep copies of part of it before this answer.</div>`), (changesEl.hidden = false);
-  if ((res.changed || []).length) {
-    await reloadFromDisk(res.changed.map((c) => c.path), false, "Claude Code edit");
-    if (res.changed.some((c) => c.status !== "modified")) refreshTree();
-  }
-  const errBtn = body.querySelector(".cc-signin");
-  if (errBtn) errBtn.onclick = () => signIn();
-  return full;
-}
-
-function errorHtml(msg = "") {
+export function errorHtml(msg = "") {
   const auth = /log ?in|sign ?in|auth|credential|401|api key|oauth|subscription/i.test(msg);
   const limit = /limit|quota|429|usage/i.test(msg);
   return `<div class="ai-error">${esc(msg || "Claude Code stopped with an error.")}${auth ? `<div><button class="small cc-signin">Sign in to Claude Code</button></div>` : ""}${limit ? `<div class="note">Claude Code shares your plan's usage limits with claude.ai.</div>` : ""}</div>`;
 }
 
-function renderChanges(box, changed, cwd) {
+export function renderChanges(box, changed, cwd) {
   if (!changed.length) { box.hidden = true; return; }
   box.hidden = false;
   const rel = (p) => { const n = p.replace(/\\/g, "/"), c = cwd.replace(/\\/g, "/") + "/"; return n.toLowerCase().startsWith(c.toLowerCase()) ? n.slice(c.length) : basename(p); };
@@ -414,7 +316,9 @@ export async function renderCCSettings(changed) {
     import("./ai.js").then((m) => { m.refreshModelSelect(); m.refreshRoleSelects(); });
     ccChanged?.();
     import("./cc-quota.js").then((m) => m.refreshQuota(true));
+    if (e.target.checked) import("./cc-sessions.js").then((m) => m.initSessions());
   };
+  import("./cc-sessions.js").then((m) => m.renderSessionSettings(box));
   box.querySelector("#cc-mode").value = settings.ccPermissionMode || "default";
   box.querySelector("#cc-mode").onchange = async (e) => {
     if (!(await confirmMode(e.target.value))) { e.target.value = settings.ccPermissionMode || "default"; return; }

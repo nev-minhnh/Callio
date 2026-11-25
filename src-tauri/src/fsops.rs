@@ -2,7 +2,7 @@ use crate::util::{CmdResult, ErrStr};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use tauri::ipc::Response;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -251,7 +251,7 @@ pub async fn write_binary(app: AppHandle, request: tauri::ipc::Request<'_>) -> C
     }
     let backup = h("x-backup").map(|v| v != "0").unwrap_or(true);
     if p.exists() && backup {
-        let dir = crate::settings::data_dir(&app).join("pdf-backups");
+        let dir = crate::settings::category_dir(&app, "pdf-backups");
         let _ = std::fs::create_dir_all(&dir);
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         // keep 30 days of backups
@@ -435,10 +435,8 @@ pub fn app_info(app: AppHandle) -> AppInfo {
 }
 
 #[tauri::command]
-pub fn set_title(app: AppHandle, title: String) {
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.set_title(&title);
-    }
+pub fn set_title(window: tauri::WebviewWindow, title: String) {
+    let _ = window.set_title(&title);
 }
 
 /// Paths given on the command line (double-click / Open with).

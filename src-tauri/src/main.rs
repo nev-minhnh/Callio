@@ -18,6 +18,30 @@ mod media;
 mod translate;
 mod websearch;
 mod drawio;
+mod mcp_ext;
+// [chat-core] mods
+
+// [chat-ui] mods
+mod chat_ui;
+
+// [memory] mods
+mod memnotes;
+mod notes_core;
+mod obsidian;
+mod storage;
+mod storage_core;
+mod vaultscope;
+
+// [windows] mods
+mod windows;
+
+// [jupyter] mods
+mod jupyter;
+
+// [wsl] mods
+
+// [ssh] mods
+
 mod ocr;
 mod localhttp;
 mod overleaf;
@@ -30,39 +54,37 @@ mod treeops;
 mod update;
 mod util;
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use tauri::{Emitter, Manager, WindowEvent};
+use tauri::Manager;
 
 struct Startup(Vec<String>);
-static FRONTEND_READY: AtomicBool = AtomicBool::new(false);
-/// Set when a close was handed to the UI and not yet acknowledged.
-static CLOSE_PENDING: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
 #[tauri::command]
-fn close_ack() {
-    *CLOSE_PENDING.lock().unwrap() = None;
+fn close_ack(window: tauri::WebviewWindow) {
+    windows::close_ack(window.label());
 }
 
+/// The page is up and listening: the first window gets the files it was started with, every
+/// window the paths that were handed to it while it loaded.
 #[tauri::command]
-fn startup_paths(state: tauri::State<Startup>) -> Vec<String> {
-    FRONTEND_READY.store(true, Ordering::SeqCst);
-    state.0.clone()
+fn startup_paths(window: tauri::WebviewWindow, state: tauri::State<Startup>) -> Vec<String> {
+    let mut v = if window.label() == windows::MAIN { state.0.clone() } else { vec![] };
+    v.extend(windows::take_pending(window.label()));
+    v
 }
 
 /// The window starts hidden and is shown once the UI has painted: no white flash on startup.
 #[tauri::command]
-fn show_window(app: tauri::AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
-        if !w.is_visible().unwrap_or(true) {
-            let _ = w.show();
-            let _ = w.set_focus();
-        }
+fn show_window(window: tauri::WebviewWindow) {
+    if !window.is_visible().unwrap_or(true) {
+        let _ = window.show();
+        let _ = window.set_focus();
     }
 }
 
 #[tauri::command]
 fn exit_app(app: tauri::AppHandle) {
+    chat_ui::clean_exit(&app);
     app.exit(0);
 }
 
@@ -121,20 +143,14 @@ fn main() {
             let paths = fsops::paths_from_args(&argv, std::path::Path::new(&cwd));
             // a newer Callio was started from another folder: offer to switch to it
             if let Some((exe, version)) = update::newer_launch(&argv, &cwd) {
-                let _ = app.emit("newer-version", serde_json::json!({ "exe": exe, "version": version, "args": paths.clone() }));
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.unminimize();
-                    let _ = w.set_focus();
+                windows::emit_app(app, "newer-version", serde_json::json!({ "exe": exe, "version": version, "args": paths.clone() }));
+                if let Some(w) = windows::handler_window(app) {
+                    windows::focus(&w);
                 }
                 return; // its files open in the new version (or here, if the user says no)
             }
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.unminimize();
-                let _ = w.set_focus();
-            }
-            if !paths.is_empty() {
-                let _ = app.emit("open-paths", paths);
-            }
+            // each file goes to the window it belongs to (or a new one); no files: just show the app
+            windows::route_external(app, paths);
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -146,6 +162,22 @@ fn main() {
         .manage(office::OfficeState::default())
         .register_asynchronous_uri_scheme_protocol("drawio", drawio::protocol)
         .setup(|app| {
+            mcp_ext::set_app(app.handle().clone());
+            // [chat-core] setup
+
+            // [chat-ui] setup
+
+            // [memory] setup
+
+            // [windows] setup
+            windows::init(app.handle());
+
+            // [jupyter] setup
+
+            // [wsl] setup
+
+            // [ssh] setup
+
             websearch::init(app.handle());
             std::thread::spawn(|| {
                 // after the window is up: tidy old temp files, then warm the office engine's file
@@ -164,7 +196,9 @@ fn main() {
             let h2 = app.handle().clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(4));
-                show_window(h2);
+                if let Some(w) = h2.get_webview_window(windows::MAIN) {
+                    show_window(w);
+                }
             });
             // the paper library's endpoint for the Edge extension, after startup settles
             let h3 = app.handle().clone();
@@ -174,22 +208,7 @@ fn main() {
             });
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if window.label() != "main" {
-                return; // helper windows (Overleaf sign-in) close normally
-            }
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                // Let the UI ask about unsaved files; if the UI never loaded, just close.
-                // If the UI didn't answer an earlier request within 2 s it is hung: let it close.
-                let mut pending = CLOSE_PENDING.lock().unwrap();
-                let hung = pending.map(|t| t.elapsed().as_secs_f32() > 2.0).unwrap_or(false);
-                if FRONTEND_READY.load(Ordering::SeqCst) && !hung {
-                    api.prevent_close();
-                    *pending = Some(std::time::Instant::now());
-                    let _ = window.emit("close-requested", ());
-                }
-            }
-        })
+        .on_window_event(|window, event| windows::on_event(window, event))
         .invoke_handler(tauri::generate_handler![
             startup_paths,
             drawio::drawio_available,
@@ -342,7 +361,71 @@ fn main() {
             overleaf::ol_unlink,
             overleaf::ol_pull,
             overleaf::ol_push,
+            // [chat-core] commands
+            claude_code::session::cc_session_start,
+            claude_code::session::cc_session_send,
+            claude_code::session::cc_session_cancel_queued,
+            claude_code::session::cc_session_interrupt,
+            claude_code::session::cc_session_stop,
+            claude_code::session::cc_session_state,
+            claude_code::session::cc_session_stop_task,
+            claude_code::session::cc_session_list,
+            claude_code::session::cc_session_meta,
+            claude_code::session::cc_journal_list,
+            claude_code::session::cc_journal_end,
+
+            // [chat-ui] commands
+            chat_ui::session_marker_begin,
+            chat_ui::session_marker_touch,
+            chat_ui::session_marker_end,
+            chat_ui::draft_save,
+            chat_ui::draft_list,
+            chat_ui::draft_delete,
+            chat_ui::draft_purge,
+            chat_ui::tabs_state_save,
+            chat_ui::tabs_state_load,
+            chat_ui::tabs_state_delete,
+
+            // [memory] commands
+            storage::storage_info, storage::storage_status, storage::storage_check_dest, storage::storage_move, storage::storage_cancel, storage::storage_restart, storage::storage_cleanup, storage::storage_use_folder, storage::storage_retry, storage::storage_open_without_data, storage::storage_portable_dismiss,
+            obsidian::obs_detect, obsidian::obs_vault_info, obsidian::obs_cli_test, obsidian::obs_cli, obsidian::obs_open, obsidian::obs_setup_vault, obsidian::obs_install, obsidian::obs_install_cancel, obsidian::vault_read, obsidian::vault_write, obsidian::vault_list, obsidian::vault_search,
+            memnotes::memnotes_get, memnotes::memnotes_write, memnotes::memnotes_remember, memnotes::memnotes_delete, memnotes::memnotes_prompt,
+
+            // [windows] commands
+            windows::win_route,
+            windows::win_report,
+            windows::win_boot,
+            windows::win_list,
+            windows::win_focus,
+            windows::win_close,
+            windows::win_previous,
+            windows::win_restore,
+            windows::win_discard_previous,
+
+            // [jupyter] commands
+            jupyter::jp_interpreters,
+            jupyter::jp_pip_install,
+            jupyter::jp_local_start,
+            jupyter::jp_local_stop,
+            jupyter::jp_local_list,
+            jupyter::jp_set_idle,
+            jupyter::jp_shutdown,
+            jupyter::jp_test,
+            jupyter::jp_rest,
+            jupyter::jp_ws_open,
+            jupyter::jp_ws_send,
+            jupyter::jp_ws_close,
+
+            // [wsl] commands
+
+            // [ssh] commands
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Callio");
+        .build(tauri::generate_context!())
+        .expect("error while building Callio")
+        .run(|app, event| {
+            // [chat-core] exit: end Claude Code processes and mark their journals clean
+            if let tauri::RunEvent::Exit = event {
+                claude_code::session::on_app_exit(app);
+            }
+        });
 }

@@ -1,0 +1,18 @@
+/* Streamed answers: each new word fades in (opacity and a blur that clears) on the compositor.
+   Two animations with their own curves, so successive words overlap into a soft wave. The
+   opacity one is the longer; stream.js unwraps a span when it ends. */
+.st-w { animation: st-o 700ms cubic-bezier(.33, 0, .12, 1) both, st-b 560ms cubic-bezier(.22, .6, .2, 1) both; }
+.st-w.st-fast { animation-duration: 300ms, 240ms; }
+@keyframes st-o { from { opacity: 0; } to { opacity: 1; } }
+@keyframes st-b { from { filter: blur(4px); } to { filter: blur(0); } }
+.st-ln-in { animation: st-o 360ms cubic-bezier(.33, 0, .12, 1) both; }
+@media (prefers-reduced-motion: reduce) { .st-w, .st-ln-in { animation: none; } }
+
+/* blocks written live look like their final render */
+.st-block:first-child > :first-child { margin-top: 0; }
+.st-a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.st-codeblock > pre > code { white-space: pre; }
+.st-math, .st-raw { white-space: pre-wrap; }
+.st-math { margin: 0 0 1em; padding: 4px 0; color: var(--fg-3); font: 12px/1.5 var(--mono, ui-monospace, monospace); }
+.st-mathsrc { opacity: .75; }
+.st-raw { margin: 0 0 1em; font: 12px/1.5 var(--mono, ui-monospace, monospace); color: var(--fg-2); overflow-x: auto; }

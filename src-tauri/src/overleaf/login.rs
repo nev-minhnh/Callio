@@ -133,7 +133,7 @@ pub async fn ol_sign_out(app: AppHandle, state: tauri::State<'_, crate::settings
         let _ = e.delete_credential();
     }
     let base = crate::settings::backend(&state).overleaf_url;
-    if let (Some(w), Ok(u)) = (app.get_webview_window("main"), Url::parse(&base)) {
+    if let (Some(w), Ok(u)) = (crate::windows::handler_window(&app), Url::parse(&base)) {
         let w2 = w.clone();
         let _ = tauri::async_runtime::spawn_blocking(move || {
             if let Ok(cs) = w2.cookies_for_url(u) {

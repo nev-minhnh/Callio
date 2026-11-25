@@ -2,14 +2,15 @@
 //! once. Events are coalesced (150 ms) and reported as the folders that changed; hidden and
 //! temporary files (and the busy folders under .git, node_modules…) are ignored.
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
-static WATCH: Mutex<Option<RecommendedWatcher>> = Mutex::new(None);
+/// one watcher per window (each window has its own folder), by window label
+static WATCH: Mutex<BTreeMap<String, RecommendedWatcher>> = Mutex::new(BTreeMap::new());
 
 fn ignored(root: &Path, p: &Path) -> bool {
     let Ok(rel) = p.strip_prefix(root) else { return true };
@@ -30,15 +31,16 @@ fn ignored(root: &Path, p: &Path) -> bool {
 
 /// Watch `path` (and everything under it); `None` stops watching.
 #[tauri::command]
-pub fn fs_watch(app: AppHandle, path: Option<String>) -> Result<(), String> {
+pub fn fs_watch(app: AppHandle, window: tauri::WebviewWindow, path: Option<String>) -> Result<(), String> {
+    let label = window.label().to_string();
     let mut slot = WATCH.lock().unwrap_or_else(|e| e.into_inner());
-    *slot = None; // drop the previous watcher first
+    slot.remove(&label); // drop this window's previous watcher first
     let Some(path) = path.filter(|p| !p.trim().is_empty()) else { return Ok(()) };
     let root = PathBuf::from(&path);
     let (tx, rx) = mpsc::channel::<notify::Result<notify::Event>>();
     let mut w = notify::recommended_watcher(tx).map_err(|e| e.to_string())?;
     w.watch(&root, RecursiveMode::Recursive).map_err(|e| e.to_string())?;
-    *slot = Some(w);
+    slot.insert(label.clone(), w);
     std::thread::spawn(move || {
         // ends when the watcher (and with it the sender) is dropped
         while let Ok(first) = rx.recv() {
@@ -66,9 +68,14 @@ pub fn fs_watch(app: AppHandle, path: Option<String>) -> Result<(), String> {
                 add(ev);
             }
             if !dirs.is_empty() {
-                let _ = app.emit("fs-changed", dirs.into_iter().collect::<Vec<_>>());
+                let _ = app.emit_to(label.clone(), "fs-changed", dirs.into_iter().collect::<Vec<_>>());
             }
         }
     });
     Ok(())
+}
+
+/// A window closed: stop its watcher.
+pub fn drop_for(label: &str) {
+    WATCH.lock().unwrap_or_else(|e| e.into_inner()).remove(label);
 }

@@ -8,9 +8,10 @@
 //! each changed file gets a "Before Claude Code" version in local history and the author sees
 //! a diff with one-click undo.
 pub mod mcp;
+pub mod session;
+pub mod session_logic;
 
 use crate::history;
-use crate::settings::data_dir;
 use crate::util::{command, run_with_timeout, safe_name, sha256_hex, which, CmdResult, ErrStr};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -28,6 +29,13 @@ pub struct CcState {
     /// runs stopped before their process existed
     cancelled: Mutex<std::collections::HashSet<String>>,
     server: tokio::sync::Mutex<Option<(u16, PathBuf)>>,
+}
+
+impl CcState {
+    /// How many Claude Code runs are going right now (the data mover refuses while any is).
+    pub fn running(&self) -> usize {
+        self.runs.lock().map(|r| r.len()).unwrap_or(0)
+    }
 }
 
 fn home() -> Option<PathBuf> {
@@ -317,7 +325,7 @@ pub struct Changed {
 }
 
 fn backups_dir(app: &AppHandle) -> PathBuf {
-    data_dir(app).join("claude-code").join("backups")
+    crate::settings::category_dir(app, "claude-code").join("backups")
 }
 
 /// Remove backups older than 30 days.
@@ -526,7 +534,7 @@ async fn ensure_server(app: &AppHandle, st: &CcState) -> anyhow::Result<PathBuf>
         return Ok(cfg.clone());
     }
     let srv = mcp::start(mcp::window_asker(app.clone())).await?;
-    let dir = data_dir(app).join("claude-code");
+    let dir = crate::settings::category_dir(app, "claude-code");
     std::fs::create_dir_all(&dir)?;
     let cfg = dir.join("callio-mcp.json");
     let body = mcp_config_json(srv.port, &srv.token);
@@ -611,7 +619,7 @@ pub async fn cc_run(app: AppHandle, req: CcRequest) -> CmdResult<CcResult> {
         return Err("Open a project folder (or a saved file) first".into());
     }
     let mcp_cfg = ensure_server(&app, &st).await.es()?;
-    let sys_file = data_dir(&app).join("claude-code").join(format!("system-{}.md", safe_name(&req.id)));
+    let sys_file = crate::settings::category_dir(&app, "claude-code").join(format!("system-{}.md", safe_name(&req.id)));
     std::fs::write(&sys_file, &req.system_append).es()?;
     struct Rm(PathBuf);
     impl Drop for Rm {

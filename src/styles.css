@@ -1335,11 +1335,7 @@ dialog[open]::backdrop { background-color: rgba(0, 0, 0, .35); }
 .ai-msg.user { transform-origin: bottom right; animation-name: msg-in-user; }
 @keyframes msg-in-user { from { opacity: 0; transform: translateY(6px) scale(.97); } }
 /* streamed answers: new words fade in; finished paragraphs are rendered once */
-.st-fade { animation: st-in .26s ease-out both; }
-@keyframes st-in { from { opacity: 0; } }
-.st-chunk > :last-child { margin-bottom: 1em; }
-.st-stable:empty + .st-tail > :first-child, .st-chunk:first-child > :first-child { margin-top: 0; }
-.st-tail > :last-child { margin-bottom: 0; }
+/* (the text effect lives in stream.css) */
 #ai-messages { scroll-padding-bottom: 12px; }
 
 /* drag to reorder (pages, slides, files) */

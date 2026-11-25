@@ -2,7 +2,6 @@
 //! file. No git, nothing to install. Stored compressed and de-duplicated under app data:
 //!   history/<file key>/log.jsonl      one JSON line per version
 //!   history/<file key>/objects/<sha>  gzip'd content
-use crate::settings::data_dir;
 use crate::util::{path_key, sha256_hex, CmdResult, ErrStr};
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use serde::{Deserialize, Serialize};
@@ -29,7 +28,7 @@ const MAX_FILE: usize = 20 * 1024 * 1024;
 
 fn dir_for(app: &AppHandle, path: &str) -> PathBuf {
     let k = sha256_hex(path_key(path).as_bytes());
-    data_dir(app).join("history").join(&k[..20])
+    crate::settings::category_dir(app, "history").join(&k[..20])
 }
 
 fn now_ms() -> u64 {
@@ -125,6 +124,7 @@ pub fn record(app: &AppHandle, path: &str, text: &str, label: &str, kind: &str) 
     if text.len() > MAX_FILE {
         return Ok(None);
     }
+    crate::storage::wait_while_moving();
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = dir_for(app, path);
     std::fs::create_dir_all(dir.join("objects"))?;

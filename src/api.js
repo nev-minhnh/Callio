@@ -23,7 +23,7 @@ export const IS_TAURI = isTauri;
 // Any wait on the backend longer than half a second shows a thin moving line at the top of the
 // window, so no button ever seems dead. Left out: dialogs waiting for you (picking a file or
 // folder, signing in, printing) and long-running work with its own display.
-const QUIET = /^(pick_[a-z_]+|ol_sign_in|lib_sign_in_pdf|print_file|define_english|translate_google|ai_chat|cc_run|cc_usage|cc_login|fs_watch|media_transcode|extract_with|launch_program|show_window|close_ack|exit_app|library_server|office_warm|web_search_engine)$/;
+const QUIET = /^(pick_[a-z_]+|ol_sign_in|lib_sign_in_pdf|print_file|define_english|translate_google|ai_chat|cc_run|cc_usage|cc_session_[a-z_]+|cc_journal_[a-z_]+|cc_login|fs_watch|media_transcode|extract_with|launch_program|show_window|close_ack|exit_app|library_server|office_warm|web_search_engine|session_marker_[a-z]+|draft_[a-z]+|tabs_state_[a-z]+|obs_install|obs_cli_test|obs_cli|storage_move|storage_info)$/;
 let busyN = 0, busyT = 0;
 function busyLine(on) {
   let el = document.getElementById("busy-line");
@@ -59,7 +59,7 @@ export const api = {
   pickFolder: (title) => call("pick_folder", { title: title || null }),
   pickSaveFile: (defaultName, dir) => call("pick_save_file", { defaultName, dir: dir || null }),
   loadSettings: () => call("load_settings"),
-  saveSettings: (settings) => call("save_settings", { settings }),
+  saveSettings: (settings, omit) => call("save_settings", { settings, omit: omit || null }), // [windows] omit: keys an extra window keeps to itself
   getSecret: (key) => call("get_secret", { key }),
   setSecret: (key, value) => call("set_secret", { key, value }),
   findRoot: (path) => call("find_root", { path }),

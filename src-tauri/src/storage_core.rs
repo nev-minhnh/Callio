@@ -19,6 +19,7 @@ pub const CATS: &[Cat] = &[
     Cat { id: "drafts", label: "Unsaved drafts", folders: &["drafts"] },
     Cat { id: "csl", label: "Citation styles", folders: &["csl"] },
     Cat { id: "tools", label: "Tools Callio installed", folders: &["bin", "TinyTeX", "tesseract", "tessdata", "downloads"] },
+    Cat { id: "ssh", label: "Server sync data", folders: &["sync"] },
     Cat { id: "skills", label: "Skills & Claude Code copies", folders: &["skills", "claude-code"] },
 ];
 

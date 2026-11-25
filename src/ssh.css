@@ -1,0 +1,75 @@
+/* Remote servers (SSH): status chip, tree badges, sync panel, dialogs, settings page. */
+.ssh-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--fg-3); flex: none; }
+.ssh-dot.s-connected, .s-idle.ssh-dot { background: var(--ok); }
+.ssh-dot.s-connecting, .ssh-dot.s-reconnecting, .ssh-dot.s-syncing, .ssh-dot.s-scanning { background: var(--warn); }
+.ssh-dot.s-offline, .ssh-dot.s-error { background: var(--danger); }
+
+.ssh-chip { display: inline-flex; align-items: center; gap: 6px; }
+.ssh-chip .ssh-h { font-weight: 600; }
+.ssh-chip .ssh-t { opacity: .85; }
+.ssh-chip.k-ok .ssh-dot { background: var(--ok); }
+.ssh-chip.k-busy .ssh-dot, .ssh-chip.k-reconnect .ssh-dot { background: var(--warn); }
+.ssh-chip.k-conflict .ssh-dot, .ssh-chip.k-offline .ssh-dot { background: var(--danger); }
+.ssh-chip.k-conflict .ssh-t { color: var(--danger); font-weight: 600; }
+.ssh-chip.k-paused .ssh-dot { background: var(--fg-3); }
+
+.tree-item { position: relative; }
+.ssh-badge { margin-left: auto; padding-left: 6px; font-size: 11px; line-height: 1; flex: none; color: var(--fg-3); }
+.ssh-badge.k-up, .ssh-badge.k-down { color: var(--accent); }
+.ssh-badge.k-conflict { color: var(--danger); font-weight: 700; }
+.ssh-badge.k-skip { color: var(--warn); }
+
+.ssh-panel { position: fixed; z-index: 60; width: min(440px, calc(100vw - 16px)); max-height: 70vh; overflow: auto; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.ssh-card { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--bg-2); display: flex; flex-direction: column; gap: 6px; }
+.ssh-card header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ssh-card .ssh-where { color: var(--fg-2); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
+.ssh-card .ssh-state { margin-left: auto; font-size: 12px; color: var(--fg-2); }
+.ssh-card h5 { margin: 4px 0 0; font-size: 12px; color: var(--fg-2); font-weight: 600; }
+.ssh-conf { display: flex; flex-direction: column; gap: 4px; padding: 4px 0; border-top: 1px solid var(--border); }
+.ssh-file { font-family: var(--mono, ui-monospace, Consolas, monospace); font-size: 12px; word-break: break-all; }
+.ssh-file small { color: var(--fg-3); }
+.ssh-cb { display: flex; flex-wrap: wrap; gap: 4px; }
+.ssh-pend { font-size: 12px; color: var(--fg-2); font-family: var(--mono, ui-monospace, Consolas, monospace); }
+.ssh-card footer { display: flex; gap: 6px; align-items: center; padding-top: 2px; }
+.ssh-errl { margin: 0; color: var(--danger); font-size: 12px; }
+.ssh-tr progress { width: 90px; vertical-align: middle; }
+.ssh-card details summary { font-size: 12px; color: var(--fg-2); cursor: pointer; }
+
+.ssh-dlg .dlg-body { max-height: 70vh; overflow: auto; }
+.ssh-form .dlg-body, .ssh-ask .dlg-body { min-width: min(480px, 90vw); }
+.ssh-form label { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
+.ssh-form label.check { flex-direction: row; align-items: flex-start; gap: 6px; }
+.ssh-form input:not([type="checkbox"]), .ssh-form select, .ssh-form textarea, .ssh-ask input:not([type="checkbox"]) { width: 100%; box-sizing: border-box; }
+.ssh-two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.ssh-pick { display: flex; gap: 6px; }
+.ssh-pick input { flex: 1; }
+.ssh-fp { display: block; padding: 8px 10px; background: var(--bg-3); border-radius: 6px; word-break: break-all; font-size: 13px; user-select: all; }
+.ssh-danger .dlg-head h2 { color: var(--danger); }
+.ssh-bad { color: var(--danger); }
+.ssh-err { color: var(--danger); }
+.ssh-log { max-height: 180px; overflow: auto; background: var(--bg-3); padding: 8px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; }
+.ssh-browse .dlg-body { min-width: min(520px, 90vw); }
+.ssh-bpath { display: flex; gap: 6px; }
+.ssh-bpath input { flex: 1; }
+.ssh-blist { height: 240px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; padding: 4px; }
+.ssh-bi { padding: 3px 8px; border-radius: 4px; cursor: default; user-select: none; }
+.ssh-bi:hover { background: var(--bg-hover); }
+.ssh-bi.sel { background: var(--accent-soft); outline: 1px solid var(--accent); }
+
+#ssh-settings .ssh-sub { margin: 12px 0 4px; font-size: 13px; color: var(--fg-2); }
+.ssh-list { display: flex; flex-direction: column; gap: 4px; }
+.ssh-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-2); }
+.ssh-row .ssh-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ssh-row small { color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; }
+.ssh-row .ssh-test.ok { color: var(--ok); }
+.ssh-row .ssh-test.bad { color: var(--danger); white-space: normal; }
+.ssh-btns { display: flex; gap: 4px; flex: none; }
+.ssh-actions { display: flex; gap: 6px; margin-top: 6px; }
+
+.ssh-runon { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding: 4px 10px; font-size: 12px; border-top: 1px solid var(--border); }
+.ssh-runon select { font-size: 12px; padding: 1px 4px; }
+.ssh-runon .ssh-hint { color: var(--fg-2); flex: 1 1 100%; order: 3; }
+.ssh-runon .ssh-inst { order: 2; }
+
+@media (max-width: 720px) { .ssh-two { grid-template-columns: 1fr; } }
+.jp-pop .ssh-ph { color: var(--accent); }

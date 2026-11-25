@@ -275,14 +275,15 @@ export async function sendMessage(text, prompt, ui) {
   const mode = pendingMode && Date.now() - pendingMode.at < 15000 ? pendingMode.mode : "next";
   pendingMode = null;
   tab.pendingTitle ||= label;
+  const sshx = await import("./ssh.js").then((m) => m.sessionExtras(cwd)).catch(() => ({})); // [ssh] where it runs
   const patch = {
-    model, permissionMode: settings.ccPermissionMode || "default", label, memory: ui.memory || "", systemAppend: SYSTEM + skills,
+    model, permissionMode: settings.ccPermissionMode || "default", label, memory: ui.memory || "", systemAppend: SYSTEM + skills + (sshx.note ? "\n\n" + sshx.note : ""),
     effort: /haiku/.test(model) ? "" : (settings.aiEffort || ""), thinking: settings.aiThinking !== false,
     web: settings.aiWeb === false ? "off" : (settings.aiSearchEngine && settings.aiSearchEngine !== "auto" ? settings.aiSearchEngine : ""),
     maxParallel: +settings.ccMaxParallel || 4, idleMinutes: +settings.ccIdleMinutes || 30,
   };
   if (!rt.handle) {
-    const r = await call("cc_session_start", { req: { cwd, model, permissionMode: patch.permissionMode, systemAppend: patch.systemAppend, label, effort: patch.effort || null, thinking: patch.thinking, web: patch.web || null, resumeId: chat.cc.id || null, window: WIN, maxParallel: patch.maxParallel, idleMinutes: patch.idleMinutes, runIn: ccRunIn(cwd), meta: { chatSid: chat.sid, project: chat.project ?? "", title: chat.title || label } } });
+    const r = await call("cc_session_start", { req: { cwd, runOn: sshx.runOn || null, model, permissionMode: patch.permissionMode, systemAppend: patch.systemAppend, label, effort: patch.effort || null, thinking: patch.thinking, web: patch.web || null, resumeId: chat.cc.id || null, window: WIN, maxParallel: patch.maxParallel, idleMinutes: patch.idleMinutes, runIn: ccRunIn(cwd), meta: { chatSid: chat.sid, project: chat.project ?? "", title: chat.title || label } } });
     rt.handle = r.handle; rt.cwd = cwd; rt.model = model;
     byHandle.set(rt.handle, rt);
   }

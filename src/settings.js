@@ -13,6 +13,7 @@ function showSection(sec) {
   if (sec === "files") refreshAssoc();
   if (sec === "ai") import("./ai.js").then((m) => m.renderAISettings());
   if (sec === "library") import("./library.js").then((m) => m.renderLibrarySettings());
+  if (sec === "ssh") import("./ssh-ui.js").then((m) => m.renderSettings());
   if (sec === "ocr") import("./ocr.js").then((m) => m.renderOcrSettings($("#ocr-settings")));
   if (sec === "memory") import("./obsidian.js").then((m) => m.renderMemorySettings($("#mem-settings")));
   if (sec === "environments") import("./envs.js").then((m) => m.renderEnvSettings($("#env-settings"))); // [wsl]

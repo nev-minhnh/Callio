@@ -328,6 +328,11 @@ async function startWith(host, choice) {
       s.starting = { connId: null };
       const info = await J("envs_jp_start", { env: choice.env, python: choice.python, dir: host.dir || "" });
       conn = { id: info.id, kind: info.kind, baseUrl: info.baseUrl };
+    } else if (choice.kind === "ssh") {
+      // [ssh] a Jupyter on a server over an SSH tunnel (src/ssh.js)
+      s.starting = { connId: null };
+      const info = await import("./ssh.js").then((m) => m.startServerJupyter(choice, host.dir || ""));
+      conn = { id: info.id, kind: "ssh", baseUrl: "" };
       kernelPath = info.kernelPath;
     } else {
       const sv = servers().find((x) => x.id === choice.serverId);
@@ -415,7 +420,9 @@ async function shutdownKernel(s, { quiet } = {}) {
 /** Works out which kernel to use when the notebook has none yet (remembered, default, or ask). */
 async function chooseDefault(host) {
   const saved = jmap()[host.key]?.choice;
-  if (saved && (saved.kind === "local" || saved.kind === "wsl" || saved.kind === "docker" || servers().some((x) => x.id === saved.serverId))) return saved;
+  if (saved && (saved.kind === "local" || saved.kind === "wsl" || saved.kind === "docker" || saved.kind === "ssh" || servers().some((x) => x.id === saved.serverId))) return saved;
+  const sshc = await import("./ssh.js").then((m) => m.defaultKernel(host.dir || "")).catch(() => null); // [ssh] notebooks in a linked folder use the server
+  if (sshc) return { ...sshc, spec: host.nb?.metadata?.kernelspec?.name || sshc.spec };
   const dir = host.dir || "";
   // [wsl] a notebook that lives in a WSL distro runs in that distro when it has a usable Python
   if (/^[\\/]{2}wsl(\.localhost|\$)[\\/]/i.test(dir)) { const pick = await import("./envs-jupyter.js").then((m) => m.defaultEnvChoice(host, settings)).catch(() => null); if (pick) return pick; }
@@ -708,6 +715,7 @@ async function paintPicker(host, p, finish, force) {
     } catch {}
   }
   h += `<div class="jp-envs"></div>`; // [wsl] groups "WSL · distro" and "Docker · container" are filled in below
+  h += await import("./ssh.js").then((m) => m.pickerHtml(host.dir || "", esc)).catch(() => ""); // [ssh] kernel group per server
   h += `<h4>Jupyter servers</h4>`;
   h += servers().map((sv) => `<div class="jp-srv" data-id="${esc(sv.id)}"><button class="jp-row" data-act="server" data-id="${esc(sv.id)}" title="${esc(sv.baseUrl)}">${ic("globe")}<span class="jp-rn">${esc(sv.name)}</span><small>${esc(sv.baseUrl)}</small></button><button class="icon small" data-act="edit" data-id="${esc(sv.id)}" title="Edit">${ic("pen")}</button><button class="icon small" data-act="remove" data-id="${esc(sv.id)}" title="Remove">${ic("x")}</button><div class="jp-specs" hidden></div></div>`).join("");
   h += `<button class="jp-row add" data-act="connect">${ic("plus")}<span class="jp-rn">Connect to a Jupyter server…</span></button>`;
@@ -723,6 +731,7 @@ async function paintPicker(host, p, finish, force) {
       const i = list.find((x) => x.path === b.dataset.path);
       return finish({ kind: "local", python: b.dataset.path, spec: b.dataset.spec || host.nb?.metadata?.kernelspec?.name || "python3", label: i?.label || b.querySelector(".jp-rn")?.textContent || "Python" });
     }
+    if (a.startsWith("ssh-")) return import("./ssh.js").then((m) => m.pickerClick(a, b, p, finish, () => paintPicker(host, p, finish, true), host.dir || ""));
     if (a === "install") return installPackages(p, bad[+b.dataset.k], host, finish);
     if (a === "connect") { closePop(); const sv = await connectDialog(); if (sv) openPicker(host, { need: false }); return; }
     if (a === "edit") { closePop(); const sv = await connectDialog(servers().find((x) => x.id === b.dataset.id)); if (sv) openPicker(host, {}); return; }

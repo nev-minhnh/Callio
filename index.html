@@ -370,6 +370,7 @@
           <!-- [wsl] nav -->
           <button type="button" data-sec="environments"><svg class="ic" aria-hidden="true"><use href="#ic-tools"/></svg><span>Environments</span></button>
           <!-- [ssh] nav -->
+          <button type="button" data-sec="ssh"><svg class="ic" aria-hidden="true"><use href="#ic-notebook"/></svg><span>Remote servers</span></button>
           <button type="button" data-sec="files"><svg class="ic" aria-hidden="true"><use href="#ic-file-types"/></svg><span>File types</span></button>
           <button type="button" data-sec="about"><svg class="ic" aria-hidden="true"><use href="#ic-info"/></svg><span>About</span></button>
         </div>
@@ -471,6 +472,10 @@
           <section data-sec="environments" hidden><div id="env-settings"></div></section>
 
           <!-- [ssh] sections -->
+          <section data-sec="ssh" hidden>
+            <h3 class="set-h">Remote servers</h3>
+            <div id="ssh-settings"><p class="note">Loading…</p></div>
+          </section>
 
           <section data-sec="files" hidden>
             <h3 class="set-h">Open with</h3>

@@ -13,13 +13,13 @@
 //!  - the MCP server tells permission questions apart by the session handle in its URL path
 //!    (`/mcp/<handle>`), so every question reaches the right tab.
 use super::session_logic::{control_line, new_uuid, translate, user_line, Tracker};
-use super::{backups_dir, claude_cmd, diff_snapshots, ensure_server, find_claude, kill_tree, prune_backups, run_args, snapshot, ui_event, CcState, Extra, Snapshot, NO_THINKING_DISPLAY};
+use super::{backups_dir, claude_cmd, diff_snapshots, ensure_server, find_claude, prune_backups, run_args, snapshot, ui_event, CcState, Extra, Snapshot, NO_THINKING_DISPLAY};
 use crate::util::{safe_name, CmdResult, ErrStr};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex, OnceLock};
@@ -52,6 +52,8 @@ pub struct StartReq {
     idle_minutes: Option<u32>,
     /// [wsl] where the process runs: "windows" (default) or "wsl:<distro>"
     run_in: Option<String>,
+    /// [ssh] None = this computer, "ssh:<host id>" = on that server (wins over run_in)
+    run_on: Option<String>,
 }
 
 /// What may change between two messages of one session.
@@ -81,8 +83,48 @@ struct Msg {
     at: u64,
 }
 
+/// How a Claude Code process is reached. A local child process is the default; a process on a
+/// server over SSH (`RemoteCtl`) plugs in here, and so can any other way of starting it.
+trait ProcCtl: Send + Sync {
+    /// `Some(exit code)` once the process has ended
+    fn try_exit(&self) -> Option<Option<i32>>;
+    fn kill_tree(&self);
+}
+impl ProcCtl for Mutex<Child> {
+    fn try_exit(&self) -> Option<Option<i32>> {
+        match self.lock().unwrap().try_wait() {
+            Ok(Some(s)) => Some(s.code()),
+            _ => None,
+        }
+    }
+    fn kill_tree(&self) {
+        kill_child_tree(self);
+    }
+}
+struct RemoteCtl(Arc<crate::ssh::claude::RemoteProc>);
+impl ProcCtl for RemoteCtl {
+    fn try_exit(&self) -> Option<Option<i32>> {
+        self.0.try_exit()
+    }
+    fn kill_tree(&self) {
+        self.0.kill();
+    }
+}
+fn kill_child_tree(c: &Mutex<Child>) {
+    // super::kill_tree wants the Arc it was written for
+    let pid = c.lock().unwrap().id();
+    #[cfg(windows)]
+    {
+        let mut k = crate::util::command("taskkill");
+        k.args(["/PID", &pid.to_string(), "/T", "/F"]);
+        let _ = crate::util::run_with_timeout(k, Duration::from_secs(10));
+    }
+    let _ = pid;
+    let _ = c.lock().unwrap().kill();
+}
+
 struct Proc {
-    child: Arc<Mutex<Child>>,
+    child: Arc<dyn ProcCtl>,
     /// lines for stdin (a writer thread owns the pipe, so a big message can never block the reader)
     tx: mpsc::Sender<String>,
     mode: String,
@@ -347,13 +389,16 @@ fn send_control(g: &mut Inner, id: &str, request: Value) -> Result<(), String> {
 }
 
 fn spawn_proc(app: &AppHandle, sess: &Arc<Sess>, g: &mut Inner) -> Result<(), String> {
-    // ---- how the process is spawned: local | wsl (the seam other ways, e.g. ssh, plug into) ----
-    let wsl = crate::envs::claude::target(&g.req.run_in, &g.req.cwd)?;
-    let exe = if wsl.is_some() { PathBuf::new() } else { find_claude().ok_or("CLAUDE_MISSING")? };
     let cwd = PathBuf::from(&g.req.cwd);
     if !cwd.is_dir() {
         return Err("Open a project folder (or a saved file) first".into());
     }
+    if let Some(host) = g.req.run_on.as_deref().and_then(|r| r.strip_prefix("ssh:")).map(String::from) {
+        return spawn_remote(app, sess, g, &host);
+    }
+    // ---- how the process is spawned: ssh (above) | wsl | this computer ----
+    let wsl = crate::envs::claude::target(&g.req.run_in, &g.req.cwd)?;
+    let exe = if wsl.is_some() { PathBuf::new() } else { find_claude().ok_or("CLAUDE_MISSING")? };
     let st = app.state::<CcState>();
     let base_cfg = tauri::async_runtime::block_on(ensure_server(app, &st)).es()?;
     // this session's own MCP address: the handle in the path tells permission questions apart
@@ -388,9 +433,47 @@ fn spawn_proc(app: &AppHandle, sess: &Arc<Sess>, g: &mut Inner) -> Result<(), St
     c.env("CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS", "1");
     c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = c.spawn().map_err(|e| format!("Couldn't start Claude Code: {e}"))?;
-    let mut stdin = child.stdin.take().ok_or("no stdin")?;
+    let stdin = child.stdin.take().ok_or("no stdin")?;
     let stdout = child.stdout.take().ok_or("no stdout")?;
     let stderr = child.stderr.take().ok_or("no stderr")?;
+    attach(app, sess, g, Box::new(stdin), Box::new(stdout), Box::new(stderr), Arc::new(Mutex::new(child)), mode, resume.is_some(), cfg, sys);
+    Ok(())
+}
+
+/// Claude Code on a server: the process runs there through SSH; Callio's tools are reached through
+/// a reverse port forward; the folder is the server side of the link that holds this project.
+fn spawn_remote(app: &AppHandle, sess: &Arc<Sess>, g: &mut Inner, host: &str) -> Result<(), String> {
+    let local = g.req.cwd.clone();
+    let (_, rcwd) = crate::ssh::remote_of(&local, host).ok_or("This folder is not linked to that server. Link it in Settings › Remote servers first, or run Claude Code on this computer.")?;
+    let st = app.state::<CcState>();
+    let base_cfg = tauri::async_runtime::block_on(ensure_server(app, &st)).es()?;
+    let mut body: Value = serde_json::from_slice(&std::fs::read(&base_cfg).es()?).es()?;
+    let url = body["mcpServers"]["callio"]["url"].as_str().unwrap_or("").trim_end_matches('/').to_string();
+    body["mcpServers"]["callio"]["url"] = json!(format!("{url}/{}", sess.handle));
+    let addr = url.split("://").nth(1).and_then(|r| r.split('/').next()).unwrap_or("127.0.0.1:0").to_string();
+    let memory = g.meta["memory"].as_str().unwrap_or("");
+    let note = format!("\n\nYou are running on the server \"{host}\", in {rcwd}. That folder is kept in two-way sync with the author's folder {local} on their Windows computer by Callio: files you change here appear there within seconds, and files they change appear here (files of 10 MB or more are not synced). Callio's own tools (mcp__callio__*) act on the author's computer and its paths, not on this server.", host = crate::ssh::host_label(host));
+    let system_text = format!("{}{}{}", g.req.system_append, memory, note);
+    let resume = g.claude_id.clone().or_else(|| g.req.resume_id.clone()).filter(|s| !s.is_empty());
+    let mode = g.req.permission_mode.clone();
+    let model = g.req.model.clone();
+    let extra = Extra { effort: g.req.effort.as_deref(), thinking: g.req.thinking, web: g.req.web.as_deref() };
+    let (m2, r2) = (mode.clone(), resume.clone());
+    let build = move |cfg: &str, sys: &str| -> Vec<String> {
+        let mut a: Vec<String> = run_args(Path::new(cfg), Path::new(sys), &m2, model.as_deref(), r2.as_deref(), &extra).into_iter().map(|x| x.to_string_lossy().to_string()).collect();
+        a.extend(["--input-format".to_string(), "stream-json".to_string()]);
+        a
+    };
+    let sp = crate::ssh::spawn_claude_blocking(host, &rcwd, &system_text, &build, &addr, body)?;
+    let crate::ssh::RemoteSpawn { proc, io } = sp;
+    attach(app, sess, g, Box::new(io.stdin), Box::new(io.stdout), Box::new(io.stderr), Arc::new(RemoteCtl(proc)), mode, resume.is_some(), PathBuf::new(), PathBuf::new());
+    Ok(())
+}
+
+/// The pipes of a started process become the session's process: a thread feeds stdin (so a big
+/// message can never block the reader), another reads the stream.
+#[allow(clippy::too_many_arguments)]
+fn attach(app: &AppHandle, sess: &Arc<Sess>, g: &mut Inner, mut stdin: Box<dyn Write + Send>, stdout: Box<dyn Read + Send>, stderr: Box<dyn Read + Send>, child: Arc<dyn ProcCtl>, mode: String, resumed: bool, cfg: PathBuf, sys: PathBuf) {
     let (tx, rx) = mpsc::channel::<String>();
     std::thread::spawn(move || {
         for line in rx {
@@ -403,16 +486,14 @@ fn spawn_proc(app: &AppHandle, sess: &Arc<Sess>, g: &mut Inner) -> Result<(), St
     g.gen += 1;
     g.closing = false;
     g.proc_events = false;
-    g.resumed_proc = resume.is_some();
+    g.resumed_proc = resumed;
     g.cli_requires_action = false;
-    g.proc = Some(Proc { child: Arc::new(Mutex::new(child)), tx, mode, model: g.req.model.clone(), cfg, sys });
-    let child = g.proc.as_ref().unwrap().child.clone();
+    g.proc = Some(Proc { child: child.clone(), tx, mode, model: g.req.model.clone(), cfg, sys });
     let (app2, sess2, gen) = (app.clone(), sess.clone(), g.gen);
     std::thread::spawn(move || reader(app2, sess2, gen, stdout, stderr, child));
-    Ok(())
 }
 
-fn reader(app: AppHandle, sess: Arc<Sess>, gen: u64, stdout: std::process::ChildStdout, stderr: std::process::ChildStderr, child: Arc<Mutex<Child>>) {
+fn reader(app: AppHandle, sess: Arc<Sess>, gen: u64, stdout: Box<dyn Read + Send>, stderr: Box<dyn Read + Send>, child: Arc<dyn ProcCtl>) {
     let err_t = std::thread::spawn(move || {
         // read to the end (so Claude Code never blocks on a full pipe), keep the last 64 KB
         let mut tail: Vec<u8> = Vec::new();
@@ -443,8 +524,8 @@ fn reader(app: AppHandle, sess: Arc<Sess>, gen: u64, stdout: std::process::Child
         handle_line(&app, &sess, gen, &mut tr, &v);
     }
     let code = loop {
-        if let Ok(Some(s)) = child.lock().unwrap().try_wait() {
-            break s.code();
+        if let Some(code) = child.try_exit() {
+            break code;
         }
         std::thread::sleep(Duration::from_millis(50));
     };
@@ -646,6 +727,10 @@ fn finish_settled(app: &AppHandle, sess: &Arc<Sess>, s: Settled) {
     // what the turn changed: compared in the background (a big project takes a moment)
     let (app2, sess2) = (app.clone(), sess.clone());
     std::thread::spawn(move || {
+        // Claude Code on a server: wait for the sync to bring its changes here, then compare
+        if sess2.inner.lock().unwrap().req.run_on.as_deref().map(|r| r.starts_with("ssh:")).unwrap_or(false) {
+            crate::ssh::sync_for_turn(&s.cwd.to_string_lossy());
+        }
         let (mut changed, mut partial) = (json!([]), false);
         let (mut files, mut added, mut removed) = (0u32, 0u32, 0u32);
         if let Some(before) = &s.before {
@@ -743,7 +828,7 @@ fn kill_proc(sess: &Sess, closing: bool) {
     if let Some((child, tx, _cfg, _sys)) = child {
         drop(tx); // closes stdin: Claude Code finishes by itself
         std::thread::sleep(Duration::from_millis(300));
-        kill_tree(&child);
+        child.kill_tree();
     }
 }
 

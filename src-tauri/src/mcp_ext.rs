@@ -28,6 +28,7 @@ pub fn defs() -> Vec<Value> {
     // [wsl] defs
 
     // [ssh] defs
+    v.extend(crate::ssh::mcp::defs());
 
     // [memory] defs
     v.extend(crate::memnotes::mcp_defs());
@@ -52,6 +53,9 @@ pub async fn call(name: &str, args: &Value) -> Value {
     // [wsl] call
 
     // [ssh] call
+    if crate::ssh::mcp::NAMES.contains(&name) {
+        return crate::ssh::mcp::call(name, args).await;
+    }
 
     // [memory] call
     if crate::memnotes::mcp_owns(name) {

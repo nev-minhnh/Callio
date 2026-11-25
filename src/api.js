@@ -25,7 +25,7 @@ export const IS_TAURI = isTauri;
 // Any wait on the backend longer than half a second shows a thin moving line at the top of the
 // window, so no button ever seems dead. Left out: dialogs waiting for you (picking a file or
 // folder, signing in, printing) and long-running work with its own display.
-const QUIET = /^(pick_[a-z_]+|ol_sign_in|lib_sign_in_pdf|print_file|define_english|translate_google|ai_chat|cc_run|cc_usage|cc_session_[a-z_]+|cc_journal_[a-z_]+|cc_login|fs_watch|envs_[a-z_]+|media_transcode|extract_with|launch_program|show_window|close_ack|exit_app|library_server|office_warm|web_search_engine|session_marker_[a-z]+|draft_[a-z]+|tabs_state_[a-z]+|obs_install|obs_cli_test|obs_cli|storage_move|storage_info)$/;
+const QUIET = /^(pick_[a-z_]+|ol_sign_in|lib_sign_in_pdf|print_file|define_english|translate_google|ai_chat|cc_run|cc_usage|cc_session_[a-z_]+|cc_journal_[a-z_]+|cc_login|fs_watch|envs_[a-z_]+|media_transcode|extract_with|launch_program|show_window|close_ack|exit_app|library_server|office_warm|web_search_engine|session_marker_[a-z]+|draft_[a-z]+|tabs_state_[a-z]+|obs_install|obs_cli_test|obs_cli|storage_move|storage_info|ssh_[a-z_]+)$/;
 let busyN = 0, busyT = 0;
 function busyLine(on) {
   let el = document.getElementById("busy-line");

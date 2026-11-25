@@ -42,6 +42,7 @@ mod jupyter;
 mod envs;
 
 // [ssh] mods
+mod ssh;
 
 mod ocr;
 mod localhttp;
@@ -178,6 +179,7 @@ fn main() {
             // [wsl] setup
 
             // [ssh] setup
+            ssh::init(app.handle());
 
             websearch::init(app.handle());
             std::thread::spawn(|| {
@@ -436,6 +438,33 @@ fn main() {
             envs::jupyter::envs_jp_venv,
 
             // [ssh] commands
+            ssh::ssh_answer,
+            ssh::ssh_set_hosts,
+            ssh::ssh_states,
+            ssh::ssh_connect,
+            ssh::ssh_disconnect,
+            ssh::ssh_forget,
+            ssh::ssh_test,
+            ssh::ssh_list_dir,
+            ssh::ssh_mkdir,
+            ssh::ssh_sync_start,
+            ssh::ssh_sync_stop,
+            ssh::ssh_sync_status,
+            ssh::ssh_sync_now,
+            ssh::ssh_sync_pause,
+            ssh::ssh_sync_resolve,
+            ssh::ssh_sync_hold,
+            ssh::ssh_sync_base,
+            ssh::ssh_sync_remote_read,
+            ssh::ssh_py_list,
+            ssh::ssh_pip_install,
+            ssh::ssh_jp_start,
+            ssh::ssh_jp_forward,
+            ssh::ssh_jp_stop,
+            ssh::ssh_jp_list,
+            ssh::ssh_claude_info,
+            ssh::ssh_claude_install,
+            ssh::ssh_prompt_note,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Callio")
@@ -443,6 +472,8 @@ fn main() {
             // [chat-core] exit: end Claude Code processes and mark their journals clean
             if let tauri::RunEvent::Exit = event {
                 claude_code::session::on_app_exit(app);
+                // [ssh] exit: stop what was started on servers, close the connections
+                ssh::on_exit();
             }
         });
 }

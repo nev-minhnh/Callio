@@ -23,7 +23,7 @@ use tauri::{AppHandle, Emitter};
 #[serde(rename_all = "camelCase")]
 pub struct ConnSpec {
     pub id: String,
-    /// "local" | "url" (| "ssh" later)
+    /// "local" | "url" | "ssh"
     pub kind: String,
     #[serde(default)]
     pub base_url: String,
@@ -48,6 +48,11 @@ impl ConnSpec {
             }
             // [wsl] a server started inside a WSL distro or a Docker container (envs/jupyter.rs)
             "wsl" | "docker" => crate::envs::jupyter::endpoint(&self.id).ok_or_else(|| "The Jupyter server in that environment is not running. Pick the kernel again.".to_string()),
+            // a Jupyter server on a remote computer, reached through an SSH tunnel (the ssh feature)
+            "ssh" => {
+                let (u, token) = crate::ssh::jupyter_endpoint(&self.id).ok_or_else(|| "The connection to the server ended. Pick the kernel again.".to_string())?;
+                Ok(net::Endpoint { base: normalize_url(&u)?, token, pin: None, id: self.id.clone() })
+            }
             k => Err(format!("Unknown connection kind: {k}")),
         }
     }

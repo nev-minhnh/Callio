@@ -3086,6 +3086,7 @@ async function boot() {
   import("./envs.js").then((e) => e.initEnvs());
 
   // [ssh] init
+  if ((settings.sshHosts || []).length || (settings.sshLinks || []).length) import("./ssh.js").then((m) => m.initSsh());
 
   initUndo();
   initHistory({

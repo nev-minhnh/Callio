@@ -621,7 +621,8 @@ function onAgent(rt, e) {
 /** A message or tool call that belongs to a subagent: it goes to that agent's log, not to the chat. */
 function subEvent(rt, ev) {
   const a = agentFor(rt, ev.parent);
-  if (ev.model && !a.model) a.model = ev.model;
+  // the model the subagent really runs on (from its messages) wins over the one its task asked for
+  if (ev.model && ev.model !== "<synthetic>") a.model = ev.model;
   if (ev.t === "assistant") {
     const now = Date.now();
     if (ev.text) a.log.push({ t: now, kind: "text", text: ev.text.replace(/\s+/g, " ").slice(0, 200) });

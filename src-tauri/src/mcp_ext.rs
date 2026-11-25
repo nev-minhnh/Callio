@@ -33,6 +33,9 @@ pub fn defs() -> Vec<Value> {
     // [memory] defs
     v.extend(crate::memnotes::mcp_defs());
 
+    // [vault] defs
+    v.extend(crate::vault::mcp_defs());
+
     v
 }
 
@@ -60,6 +63,11 @@ pub async fn call(name: &str, args: &Value) -> Value {
     // [memory] call
     if crate::memnotes::mcp_owns(name) {
         return crate::memnotes::mcp_call(name, args).await;
+    }
+
+    // [vault] call
+    if crate::vault::mcp_owns(name) {
+        return crate::vault::mcp_call(name, args).await;
     }
 
     crate::claude_code::mcp::text_result(Value::String(format!("Unknown tool: {name}")), true)

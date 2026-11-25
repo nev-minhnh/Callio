@@ -1,0 +1,33 @@
+/* The AI chat in its own window (detach.js): the chat window shows only the AI panel; the editor window
+   shows a thin rail where the panel was. */
+
+/* ---- chat window ---- */
+html.role-chat #toolbar, html.role-chat #tabs, html.role-chat #statusbar,
+html.role-chat #main > :not(#ai-panel):not(#ai-act-col):not(#dt-rail) { display: none !important; }
+html.role-chat #main { display: flex; flex: 1; min-height: 0; min-width: 0; }
+html.role-chat #ai-panel { flex: 1; width: auto !important; min-width: 0; border-left: 0; }
+html.role-chat #ai-panel.with-col { min-width: 0; }
+html.role-chat #ai-close, html.role-chat #ai-pop, html.role-chat [data-ai="popout"] { display: none; }
+
+#dt-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--bg-2); font-size: 12.5px; color: var(--fg-2); min-height: 38px; box-sizing: border-box; }
+#dt-head b { color: var(--fg); font-weight: 600; }
+#dt-head .dt-ic { display: inline-flex; color: var(--gold); }
+#dt-head .dt-ic .ic { width: 15px; height: 15px; }
+#dt-head .dt-chip { border: 1px solid var(--border); border-radius: 999px; padding: 1px 9px; font-size: 11.5px; color: var(--fg-2); white-space: nowrap; max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
+#dt-head #dt-pin.on { color: var(--gold); }
+#dt-head #dt-attach-btn { display: inline-flex; align-items: center; gap: 6px; }
+#dt-head #dt-attach-btn .ic { width: 15px; height: 15px; }
+#dt-note { display: flex; align-items: center; gap: 8px; margin: 8px 10px 0; padding: 6px 8px 6px 10px; border: 1px dashed var(--border); border-radius: 8px; font-size: 12px; color: var(--fg-3); line-height: 1.4; }
+#dt-note[hidden] { display: none; }
+#dt-note span { flex: 1; }
+
+/* ---- editor window while its chat is out ---- */
+#dt-rail { width: 44px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 10px; padding-top: 12px; border-left: 1px solid var(--border); background: var(--bg-2); }
+#dt-rail .dt-btn { display: inline-flex; align-items: center; justify-content: center; padding: 7px; border-radius: 8px; border: 1px solid var(--gold); color: var(--gold); background: transparent; cursor: pointer; }
+#dt-rail .dt-btn:hover { background: var(--accent-soft); }
+#dt-rail .dt-btn .ic { width: 15px; height: 15px; }
+#dt-rail .dt-dot { width: 9px; height: 9px; border-radius: 50%; cursor: pointer; flex: none; }
+#dt-rail .dt-dot.run { background: #2fe08c; box-shadow: 0 0 0 0 rgba(47, 224, 140, .5); animation: dt-pulse 1.8s infinite; }
+#dt-rail .dt-dot.need { background: #ffb020; }
+@keyframes dt-pulse { 70% { box-shadow: 0 0 0 6px rgba(47, 224, 140, 0); } 100% { box-shadow: 0 0 0 0 rgba(47, 224, 140, 0); } }
+@media (prefers-reduced-motion: reduce) { #dt-rail .dt-dot.run { animation: none; } }

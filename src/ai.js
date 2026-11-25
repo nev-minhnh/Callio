@@ -3,8 +3,11 @@
 import { createStreamer } from "./stream.js";
 import { chatView, loadHistory, htmlCache, markLive, markDone, stickToBottom, nudge, estimateHeight } from "./chat-view.js";
 import { api, call, listen } from "./api.js";
-import { settings, updateSettings, toast, status, ask, activeTab, getLastCompile, openPath, basename, dirname, folder, compile } from "./main.js";
-import { getView, getSelectionInfo, startReview, endReview, isReviewing, setReviewHooks, setReviewLabel, project, gotoLine } from "./editor.js";
+import { settings, updateSettings, toast, status, ask, basename, dirname } from "./main.js";
+// [detach] the editor's tabs, selection and actions come through host.js: in a chat window (the panel popped out) they are the editor window's
+import { activeTab, getLastCompile, openPath, getFolder, compile, getView, getSelectionInfo, project, syncDoc } from "./host.js";
+import * as host from "./host.js";
+import { startReview, endReview, isReviewing, setReviewHooks, setReviewLabel, gotoLine } from "./editor.js";
 import { record as historyRecord } from "./history.js";
 import { ic } from "./icons.js";
 
@@ -118,7 +121,7 @@ export async function runAI(role, opts, on = () => {}) {
       id, provider, model, system: opts.system || "", messages: opts.messages,
       tools: pid !== "claudecode" && !!opts.tools && settings.aiTools !== false, web: pid !== "claudecode" && !!opts.web,
       maxTokens: opts.maxTokens || null, temperature: opts.temperature ?? null,
-      projectPath: folder || t?.path || null,
+      projectPath: getFolder() || t?.path || null,
       searchBackend: searchBackendFor(), searchUrl: settings.aiSearchUrl || "",
       skills: opts.tools && settings.aiTools !== false ? skillRefs() : [],
       effort: opts.effort !== undefined ? opts.effort || null : role === "chat" ? (settings.aiEffort || null) : null,
@@ -132,7 +135,10 @@ async function needModel() {
   const r = await ask({ title: "Set up AI", text: "Turn on Claude Code (your Claude Pro/Max plan — no API key) or add an API key (Claude, ChatGPT, Gemini, Perplexity, Grok) or your llama.cpp server address in AI settings.", buttons: [{ label: "Later", value: null }, { label: "Open AI settings", value: "go", primary: true }] });
   if (r) openAISettings();
 }
-function openAISettings() { import("./settings.js").then((m) => m.openSettings("ai")); }
+function openAISettings() {
+  if (host.REMOTE) return void host.openInEditor("settings", "ai"); // [detach] the settings dialog lives in the editor window
+  import("./settings.js").then((m) => m.openSettings("ai"));
+}
 
 // ---------------- skills ----------------
 let skillList = [];
@@ -260,7 +266,7 @@ const nrm = (p) => String(p || "").replace(/\\/g, "/").toLowerCase();
 export function fileTag(path, mode = "read", live = true) {
   if (!path) return;
   let p = String(path);
-  if (!/^([A-Za-z]:)?[\\/]/.test(p) && folder) p = folder.replace(/[\\/]$/, "") + "/" + p;
+  if (!/^([A-Za-z]:)?[\\/]/.test(p) && getFolder()) p = getFolder().replace(/[\\/]$/, "") + "/" + p;
   const k = nrm(p);
   const cur = fileTags.get(k);
   fileTags.set(k, { path: p, mode: cur?.mode === "edit" ? "edit" : mode, live });
@@ -281,7 +287,7 @@ function renderFileTags() {
 }
 
 // ---------------- conversations, saved per project folder ----------------
-const sessProject = () => folder || "";
+const sessProject = () => getFolder() || "";
 const sessWhen = (t) => new Date(t).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
 export async function saveSession(c = chat) {
   if (!c.history.length) return;
@@ -372,7 +378,7 @@ function onProjectChanged() {
 
 // ---------------- project memory (recalled with zero model calls) ----------------
 const memOn = () => settings.aiMemory !== false;
-function memProject() { const t = activeTab(); return folder || (t?.path ? dirname(t.path) : ""); }
+function memProject() { const t = activeTab(); return getFolder() || (t?.path ? dirname(t.path) : ""); }
 async function memRecall(query, before = null) {
   const project = memProject();
   if (!memOn() || !project) return null;
@@ -382,6 +388,8 @@ async function memRecall(query, before = null) {
   if (settings.memoryStore === "obsidian") {
     try { const extra = await (await import("./memory-notes.js")).vaultRecall(project, query); if (extra) r = { ...(r || { skills: [] }), text: `${r?.text || ""}\n\n${extra}`.trim() }; } catch {}
   }
+  // [vault] the open note's links and backlinks (only what the AI may read)
+  try { const t = activeTab(); if (t?.path && /\.md$/i.test(t.path)) { const x = await call("vault_ai_context", { path: t.path }); if (x) r = { ...(r || { skills: [] }), text: `${r?.text || ""}\n\n${x}`.trim() }; } } catch {}
   return r;
 }
 /** The curated note (MEMORY.md / the vault's project note, capped) for the system prompt of a session. */
@@ -415,7 +423,15 @@ async function rememberedSkills(names) {
 }
 
 export function toggleAIPanel(force) {
+  // [detach] the chat is in its own window: the AI button / Ctrl+L brings that window forward; the panel stays closed here
+  const out = host.chatOut();
+  if (out) { if (force !== false) out.focus(); return; }
   const panel = $("#ai-panel");
+  if (host.REMOTE) { // a chat window is its panel: it never closes
+    panel.hidden = false;
+    if (force !== false) { refreshModelSelect(); renderContext(); $("#ai-text").focus(); if (!skillList.length) scanSkills(); offerContinue(); import("./cc-quota.js").then((m) => m.refreshQuota()); }
+    return;
+  }
   const show = force ?? (panel.hidden || panel.classList.contains("out"));
   clearTimeout(panel._t);
   panel.classList.remove("in", "out");
@@ -489,6 +505,7 @@ function engineMenu(ev) {
 }
 
 function renderContext() {
+  host.contextTouched(); // [detach] the editor window passes it on to its chat window
   const box = $("#ai-context");
   const t = activeTab();
   const sel = getSelectionInfo();
@@ -522,6 +539,7 @@ function renderContext() {
 
 /** Add a file or folder from the file list to the chat's context. */
 export async function addToChat(path, isDir) {
+  if (host.chatOut()) return void host.chatOut().forward("addToChat", { path, isDir }); // [detach]
   if (chat.attached.some((a) => a.path === path)) { toggleAIPanel(true); return; }
   const a = { path, isDir, text: null, list: null };
   try {
@@ -679,7 +697,7 @@ function decorateCode(el, selAtSend) {
     const btn = (label, fn, primary) => { const b = document.createElement("button"); b.textContent = label; if (primary) b.className = "primary"; b.onclick = fn; bar.appendChild(b); };
     if (selAtSend && selAtSend.to > selAtSend.from) btn("Replace selection", () => applyAt(selAtSend.from, selAtSend.to, code, "Chat suggestion", selAtSend), true);
     if (extraCtx?.apply && activeTab()?.kind === "ipynb") btn(extraCtx.label || "Apply", () => extraCtx.apply(code), true);
-    btn("Insert at cursor", () => { const s = getView().state.selection.main; applyAt(s.from, s.to, code, "Chat suggestion"); });
+    btn("Insert at cursor", () => { if (host.REMOTE) return void host.insertAtCursor(code, "Chat suggestion").catch((e) => toast(e.message, "err")); const s = getView().state.selection.main; applyAt(s.from, s.to, code, "Chat suggestion"); });
     btn("Copy", async () => { await navigator.clipboard.writeText(code); toast("Copied", "ok", 1200); });
     pre.after(bar);
   }
@@ -687,6 +705,11 @@ function decorateCode(el, selAtSend) {
 
 /** Apply text as a reviewed diff (after recording a version for safety). */
 async function applyAt(from, to, text, label, expect) {
+  // [detach] in a chat window the edit is made by the editor window (diff review, version saved first, undo there)
+  if (host.REMOTE) return void (await host.applyEdit({ from, to, text, label, expect: expect ? { text: expect.text } : null }).catch((e) => toast(e.message, "err")));
+  return applyAtLocal(from, to, text, label, expect);
+}
+export async function applyAtLocal(from, to, text, label, expect) {
   const t = activeTab();
   if (!t || t.kind === "pdf") return;
   const v = getView();
@@ -751,6 +774,7 @@ async function send(textArg) {
   const input = $("#ai-text");
   const text = (textArg ?? input.value).trim();
   if (!text || chat.busyId) return;
+  await syncDoc(); // [detach] in a chat window: the editor window's document and selection, fresh
   // [chat-core] while Claude Code works the text box stays open: Enter queues the message ("Send next")
   closeSlash();
   const slash = await resolveSlash(text);
@@ -838,15 +862,7 @@ async function sendCC(text, slash) {
     const memText = (note ? `${note}\n\n` : "") + (mem ? await rememberedSkills(mem.skills) : "") + (mem?.text ? `\n\n${mem.text}` : "");
     if (chat.attached.length) prompt += `\n\n(Files and folders I added for context — read them as needed:\n${chat.attached.map((a) => `- ${a.path}${a.isDir ? " (folder)" : ""}`).join("\n")})`;
     $("#ai-text").value = "";
-    // Called once per answered message (the message and the answer that followed it), whichever
-    // tab it belongs to: keeps the conversation, the project memory and the saved chat up to date.
-    const done = async (c, full, res) => {
-      c.history.push({ role: "user", content: text }, { role: "assistant", content: full || "" });
-      memRecord([{ role: "user", text, file: memAt.file, model: memAt.model, skills: slash?.skill ? [slug(slash.skill.name)] : [] }, { role: "assistant", text: full || "", model: memAt.model, changed: (res?.changed || []).map((x) => x.path) }], memAt.project, memAt.session);
-      if (c.cc.id && memOn() && memAt.project) call("mem_set_cc", { project: memAt.project, session: c.cc.id, model: memAt.model }).catch(() => {});
-      await saveSession(c);
-    };
-    const ui = { addMsg, renderMd, settleMd, ctx: chat.ctx, skillsForClaude, thinkBox, shown: text, memory: memText, fileTag, done, memProject };
+    const ui = ccUiFor({ text, memText, memAt, skills: slash?.skill ? [slug(slash.skill.name)] : [] }, chat.ctx);
     await sx.sendMessage(text, prompt, ui);
   } catch (e) {
     chat.ccReady = false;
@@ -855,6 +871,38 @@ async function sendCC(text, slash) {
   } finally {
     fileTagsDone();
   }
+}
+
+/**
+ * What one Claude Code message carries with it (cc-sessions.js): the helpers that draw its answer and
+ * `done`, called once per answered message (the message and the answer that followed it), whichever tab
+ * it belongs to — it keeps the conversation, the project memory and the saved chat up to date.
+ * `d` is plain data (so a message in flight can move to another window with its session, see
+ * detach.js): { text, memText, memAt: {project, session, file, model}, skills }. `cont`: the answer
+ * continues one that the window before began — it is added to that answer, not recorded as a new message.
+ */
+export function ccUiFor(d, ctx, cont = false) {
+  const { text, memAt } = d;
+  const done = async (c, full, res) => {
+    if (cont && c.history[c.history.length - 1]?.role === "assistant") {
+      const last = c.history[c.history.length - 1];
+      last.content = (last.content ? last.content + "\n\n" : "") + (full || "");
+    } else c.history.push({ role: "user", content: text }, { role: "assistant", content: full || "" });
+    memRecord([{ role: "user", text, file: memAt.file, model: memAt.model, skills: d.skills || [] }, { role: "assistant", text: full || "", model: memAt.model, changed: (res?.changed || []).map((x) => x.path) }], memAt.project, memAt.session);
+    if (c.cc.id && memOn() && memAt.project) call("mem_set_cc", { project: memAt.project, session: c.cc.id, model: memAt.model }).catch(() => {});
+    await saveSession(c);
+  };
+  return { addMsg, renderMd, settleMd, ctx: ctx || chat.ctx, skillsForClaude, thinkBox, shown: text, memory: d.memText, fileTag, done, memProject, desc: d, cont };
+}
+
+/** [detach] Draw a chat's messages into a list (a chat that moved here from another window). */
+export async function rebuildMessages(list, c) {
+  await ensureMd();
+  if (!c.history.length) { list.innerHTML = emptyChatHtml(c.project); return; }
+  loadHistory(list, c.history.map((m) => ({ role: m.role, text: m.content || "" })), buildHistoryMsg, estimateHeight);
+}
+function emptyChatHtml(project) {
+  return `<div class="ai-empty"><b>New chat</b><p>Your document and selection are included as context (see the chips below). Conversations are saved with ${project ? `the folder <b>${esc(basename(project))}</b>` : "no folder (open a folder to keep them with a project)"}.${memOn() ? " What you worked on in this project before is remembered and recalled when it's relevant." : ""}</p><div class="sess-recent"></div></div>`;
 }
 
 /** The helpers a restored Claude Code session needs to send its "Continue" message (cc-sessions.js). */
@@ -876,7 +924,7 @@ export function resetChat() {
   chat.cc = { id: null };
   chat.mem = `s${Date.now().toString(36)}`;
   chat.sid = newSid(); chat.title = ""; chat.created = Date.now(); chat.project = sessProject();
-  $("#ai-messages").innerHTML = `<div class="ai-empty"><b>New chat</b><p>Your document and selection are included as context (see the chips below). Conversations are saved with ${chat.project ? `the folder <b>${esc(basename(chat.project))}</b>` : "no folder (open a folder to keep them with a project)"}.${memOn() ? " What you worked on in this project before is remembered and recalled when it's relevant." : ""}</p><div class="sess-recent"></div></div>`;
+  $("#ai-messages").innerHTML = emptyChatHtml(chat.project);
   renderSessBar();
   showRecent();
   offerContinue();
@@ -959,6 +1007,7 @@ async function brief() {
   const project = memProject();
   if (!project) return toast("Open a folder first: /brief describes the project in it.", "", 3500);
   if (!modelFor("summary")) return needModel();
+  await syncDoc(); // [detach]
   addMsg("user", "/brief");
   const el = addMsg("assistant", `<div class="ai-body markdown-body"><span class="ai-typing">●●●</span></div>`);
   const body = el.querySelector(".ai-body");
@@ -985,7 +1034,7 @@ const slug = (n) => n.trim().replace(/\s+/g, "-");
 let ccSkillCache = { t: 0, cwd: "", list: [] };
 async function ccSkillList() {
   const t = activeTab();
-  const cwd = folder || (t?.path ? dirname(t.path) : "");
+  const cwd = getFolder() || (t?.path ? dirname(t.path) : "");
   if (Date.now() - ccSkillCache.t < 30_000 && ccSkillCache.cwd === cwd) return ccSkillCache.list;
   let list = [];
   try { list = await call("cc_skills", { cwd: cwd || null }); } catch {}
@@ -1232,7 +1281,7 @@ export async function fixError(d) {
 export async function verifyBib(path) {
   if (!path) {
     const bibs = project.files.filter((f) => f.endsWith(".bib"));
-    const root = folder || (activeTab()?.path ? dirname(activeTab().path) : null);
+    const root = getFolder() || (activeTab()?.path ? dirname(activeTab().path) : null);
     if (activeTab()?.kind === "bib") path = activeTab().path;
     else if (bibs.length === 1 && root) path = `${root}/${bibs[0]}`;
     else if (bibs.length > 1 && root) {
@@ -1590,6 +1639,7 @@ export function initAI() {
   chat.project = sessProject();
   renderSessBar();
   $("#ai-close").onclick = () => toggleAIPanel(false);
+  $("#ai-pop").onclick = () => import("./detach.js").then((m) => m.toggleDetached()); // [detach]
   $("#ai-send").onclick = () => send();
   $("#ai-stop").onclick = () => { if (chat.stop) return chat.stop(); for (const id of handlers.keys()) if (id.startsWith("chat")) cancelAI(id); };
   $("#ai-mode").onclick = () => import("./claude-code.js").then((m) => { m.cycleMode(); refreshModelSelect(); });
@@ -1623,7 +1673,7 @@ export function initAI() {
   more.addEventListener("click", (e) => {
     const b = e.target.closest("[data-ai]"); if (!b) return;
     more.hidden = true;
-    ({ new: newChat, "verify-bib": () => verifyBib(), skills: async () => { await scanSkills(); openSkillsDialog(); }, memory: openMemoryDialog, settings: openAISettings })[b.dataset.ai]?.();
+    ({ new: newChat, "verify-bib": () => verifyBib(), skills: async () => { await scanSkills(); openSkillsDialog(); }, memory: openMemoryDialog, settings: openAISettings, popout: () => import("./detach.js").then((m) => m.toggleDetached()) })[b.dataset.ai]?.();
   });
   // selection action menu
   const am = $("#ai-actions");

@@ -56,6 +56,17 @@ export const htmlCache = {
     cacheMap.delete(k); cacheMap.set(k, html); cacheChars += html.length;
     while (cacheChars > 24e6 && cacheMap.size > 1) { const [k0, v0] = cacheMap.entries().next().value; cacheMap.delete(k0); cacheChars -= v0.length; }
   },
+  /** [detach] The newest entries (up to `max` characters), to hand to another window so its chats draw without rendering again. */
+  dump(max = 3e6) {
+    const out = [];
+    let n = 0;
+    for (const [k, v] of [...cacheMap.entries()].reverse()) { n += v.length; if (n > max) break; out.unshift([k, v]); }
+    return out;
+  },
+  /** [detach] Take entries made by dump() in another window. */
+  load(list) {
+    for (const [k, v] of list || []) { if (typeof k !== "string" || typeof v !== "string" || cacheMap.has(k)) continue; cacheMap.set(k, v); cacheChars += v.length; }
+  },
   renders: 0, // how many answers were rendered from Markdown (for tests and measuring)
   get size() { return cacheMap.size; },
   clear() { cacheMap.clear(); cacheChars = 0; },

@@ -21,7 +21,7 @@ const maxPar = () => window.__ccMock?.maxParallel || 4;
 
 if (typeof window !== "undefined") {
   window.__ccMock = Object.assign(window.__ccMock || {}, {
-    journals, live, sent: [], controls: [],
+    journals, live, sent: [], controls: [], rpcWaiters,
     /** Forget every live session without a clean end (what a power cut leaves behind). */
     crash() { for (const s of live.values()) s.abort = true; live.clear(); },
     seedJournal(j) { journals.set(j.handle, { cleanEnd: false, status: "running", queued: [], meta: {}, settings: {}, createdAt: now(), updatedAt: now(), ...j }); },
@@ -29,7 +29,8 @@ if (typeof window !== "undefined") {
   });
 }
 
-function ev(s, kind, extra = {}) { emit("cc-session", { handle: s.handle, kind, ...extra }); }
+let evSeq = 0; // like the real events: a number that only grows (detach.js uses it to hand a session to another window)
+function ev(s, kind, extra = {}) { emit("cc-session", { handle: s.handle, kind, seq: ++evSeq, ...extra }); }
 function status(s, st) {
   s.status = st;
   ev(s, "status", { status: st, proc: s.proc, turnActive: s.turn, claudeId: s.claudeId, queued: s.pending.map((m) => ({ uuid: m.uuid, text: m.text, mode: m.mode, at: m.at, sent: true })), waiting: s.perms });
@@ -60,7 +61,7 @@ async function ask(s, toolName, input, parent, toolUseId) {
   const rpc = ++rpcSeq;
   s.perms++;
   status(s, "waiting");
-  const v = await new Promise((res) => { rpcWaiters.set(rpc, res); s.rpcs.add(rpc); emit("cc-rpc", { rpc, method: "permission", params: { toolName, input, session: s.handle, toolUseId } }); });
+  const v = await new Promise((res) => { rpcWaiters.set(rpc, res); s.rpcs.add(rpc); (window.__mockRpcEmit || emit)("cc-rpc", { rpc, method: "permission", params: { toolName, input, session: s.handle, toolUseId } }); });
   s.rpcs.delete(rpc);
   s.perms--;
   if (!s.perms) status(s, "running");

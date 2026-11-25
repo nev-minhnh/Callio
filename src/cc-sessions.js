@@ -13,7 +13,9 @@
 // sessions. The chat that is in view is ai.js's live `chat` object; the other tabs' chats are
 // kept here and swapped in when picked.
 import { call, listen } from "./api.js";
-import { settings, updateSettings, toast, ask, saveAll, reloadFromDisk, refreshTree, basename } from "./main.js";
+import { settings, updateSettings, toast, ask, basename } from "./main.js";
+import * as host from "./host.js"; // [detach] the editor's files: this window's, or (chat window) the editor window's
+const { reloadFromDisk, refreshTree } = host;
 import { chatState, swapChat, freshChatState, resetChat, registerSessions, addMsg, loadSession, refreshAIContext, renderSessBar } from "./ai.js";
 import { ccRunIn, fromClaude } from "./envs-core.js"; // [wsl]
 import { toolTitle, EDIT_TOOLS, renderChanges, errorHtml, permissionCard, cards, setSessionHooks, SYSTEM, contextPreamble, projectDir } from "./claude-code.js";
@@ -267,7 +269,7 @@ export async function sendMessage(text, prompt, ui) {
   const cwd = projectDir();
   if (!cwd) throw new Error("Open a project folder or a saved file first — Claude Code works inside a folder.");
   // Claude Code reads files from disk: save open edits first (each save keeps a version)
-  await saveAll((t) => !!t.path && norm(t.path).startsWith(norm(cwd)));
+  await host.saveInside(cwd);
   const rt = (tab.rt ??= makeRuntime(tab));
   const model = (settings.aiModel_chat || "claudecode|default").split("|")[1];
   const skills = await ui.skillsForClaude();
@@ -283,7 +285,7 @@ export async function sendMessage(text, prompt, ui) {
     maxParallel: +settings.ccMaxParallel || 4, idleMinutes: +settings.ccIdleMinutes || 30,
   };
   if (!rt.handle) {
-    const r = await call("cc_session_start", { req: { cwd, runOn: sshx.runOn || null, model, permissionMode: patch.permissionMode, systemAppend: patch.systemAppend, label, effort: patch.effort || null, thinking: patch.thinking, web: patch.web || null, resumeId: chat.cc.id || null, window: WIN, maxParallel: patch.maxParallel, idleMinutes: patch.idleMinutes, runIn: ccRunIn(cwd), meta: { chatSid: chat.sid, project: chat.project ?? "", title: chat.title || label } } });
+    const r = await call("cc_session_start", { req: { cwd, runOn: sshx.runOn || null, model, permissionMode: patch.permissionMode, systemAppend: patch.systemAppend, label, effort: patch.effort || null, thinking: patch.thinking, web: patch.web || null, resumeId: chat.cc.id || null, window: WIN, maxParallel: patch.maxParallel, idleMinutes: patch.idleMinutes, runIn: ccRunIn(cwd), meta: { chatSid: chat.sid, project: chat.project ?? "", title: chat.title || label, win: WIN } } });
     rt.handle = r.handle; rt.cwd = cwd; rt.model = model;
     byHandle.set(rt.handle, rt);
   }
@@ -419,8 +421,10 @@ const H = {
   },
 };
 function onSession(e) {
+  if (buffering) { buffering.push(e); return; } // [detach] sessions are being taken over from another window
   const rt = byHandle.get(e.handle);
   if (!rt) return;
+  if (e.seq) seen.set(e.handle, e.seq);
   try { H[e.kind]?.(rt, e); } catch (er) { console.warn("cc-session", e.kind, er); }
 }
 
@@ -523,7 +527,7 @@ function endTurn(rt) {
 function onEv(rt, ev) {
   if (ev.parent) return subEvent(rt, ev);
   let seg = rt.seg;
-  if (!seg && ["text", "thinking", "assistant"].includes(ev.t)) seg = rt.seg = openSeg(rt, null);
+  if (!seg && ["text", "thinking", "assistant"].includes(ev.t)) seg = rt.seg = openSeg(rt, takeCont(rt));
   if (!seg) return;
   if (ev.t === "text") {
     seg.think.answer(); seg.streamed = true; seg.full += ev.text; seg.stream.set(seg.full);
@@ -636,6 +640,9 @@ function subResult(rt, parent, r) {
 
 // ---------------- permission questions ----------------
 function onPermission(params, rpc) {
+  if (released.has(params.session)) return; // [detach] that session's chat is in another window now (it asks there)
+  if (shownRpc.has(rpc)) return; // asked again after the chat moved: the card is already here
+  shownRpc.add(rpc);
   const rt = byHandle.get(params.session);
   if (!rt) return void permissionCard(rpc, params);
   const parent = params.toolUseId ? rt.toolParent.get(params.toolUseId) || null : null;
@@ -645,12 +652,13 @@ function onPermission(params, rpc) {
   if (ag) ag.status = "waiting";
   renderAll(true);
   if (rt.tab !== active || $("#ai-panel").hidden) notifyNeed(rt, p);
-  const host = rt.seg?.toolsEl || rt.lastSeg?.toolsEl || rt.tab.list;
-  permissionCard(rpc, params, rt, host, rt.tab === active).then((card) => {
+  const hostEl = rt.seg?.toolsEl || rt.lastSeg?.toolsEl || rt.tab.list;
+  permissionCard(rpc, params, rt, hostEl, rt.tab === active).then((card) => {
     if (!card) { rt.perms.delete(rpc); if (ag && ag.status === "waiting") ag.status = "running"; renderAll(true); }
   });
 }
 function onPermAnswered(rpc) {
+  shownRpc.delete(rpc);
   for (const rt of byHandle.values()) {
     const p = rt.perms.get(rpc);
     if (!p) continue;
@@ -702,6 +710,7 @@ function draw() {
   drawQueue();
   drawButtons();
   if (!dom.pop.hidden) drawPop();
+  statusHook?.();
 }
 function tick() {
   const rt = active?.rt;
@@ -800,12 +809,21 @@ async function onPopClick(e) {
 
 // ---------------- restore after a power cut ----------------
 async function unfinished() {
-  try { return (await call("cc_journal_list")).filter((j) => !j.cleanEnd && !j.live && !byHandle.has(j.handle)); } catch { return []; }
+  try {
+    const list = (await call("cc_journal_list")).filter((j) => !j.cleanEnd && !j.live && !byHandle.has(j.handle));
+    // [detach] sessions of a chat window belong to that window while it exists (it brings them back itself)
+    const mine = (j) => !String(j.meta?.win || "").startsWith("chat-") || (host.REMOTE ? j.meta.win === WIN : !chatLabels.has(j.meta.win));
+    return list.filter(mine);
+  } catch { return []; }
 }
+let chatLabels = new Set();
 async function restoreAll() {
+  if (!host.REMOTE) { try { chatLabels = new Set((await call("win_list")).filter((w) => w.role === "chat").map((w) => w.label)); } catch {} }
   const list = await unfinished();
   for (const j of list) await restoreTab(j);
 }
+/** [detach] A restored chat window brings back its own interrupted sessions. */
+export const restoreOwn = restoreAll;
 
 /** A tab for an interrupted session: its saved conversation and a Continue button (never runs by itself). */
 async function restoreTab(j) {
@@ -868,5 +886,187 @@ export function renderSessionSettings(box) {
 
 /** Test and debugging aid (the UI never calls it). */
 export function debugState() {
-  return { tabs: tabs.map((t) => ({ id: t.id, active: t === active, handle: t.rt?.handle || null, status: t.rt?.status || null, perms: t.rt ? [...t.rt.perms.keys()] : [], queue: t.rt?.queue.length || 0, agents: t.rt ? [...t.rt.act.agents.values()].map((a) => ({ key: a.key, status: a.status, type: a.type, log: a.log.length })) : [] })) };
+  return { buffering: buffering ? buffering.length : null, seen: Object.fromEntries(seen), tabs: tabs.map((t) => ({ id: t.id, active: t === active, handle: t.rt?.handle || null, status: t.rt?.status || null, perms: t.rt ? [...t.rt.perms.keys()] : [], queue: t.rt?.queue.length || 0, agents: t.rt ? [...t.rt.act.agents.values()].map((a) => ({ key: a.key, status: a.status, type: a.type, log: a.log.length })) : [] })) };
+}
+
+// ======================================================================================================
+// [detach] The AI chat moves between windows (detach.js). The Claude Code processes live in Rust and keep
+// running; what moves is this window's picture of them: the tabs (conversation, draft), and for each
+// session its state (status, to-do list, subagents, queued messages…). The window that takes over
+//   1. starts buffering `cc-session` events (they carry a growing `seq`),
+//   2. receives the state from the other window, which settles its answers first (what a running
+//      answer has written so far is finished and recorded; the rest of it continues in a new block),
+//   3. applies the buffered events newer than what the state already covers,
+//   4. asks Rust to send the session's permission questions to its window (cc_session_set_window, which
+//      also asks the ones still open again).
+// Messages already drawn are rebuilt from the saved conversation (the HTML cache makes it instant).
+// ======================================================================================================
+let buffering = host.REMOTE ? [] : null;      // events kept aside while sessions are being taken over
+const seen = new Map();                       // handle → the last event number applied here
+const released = new Set();                   // sessions that moved to another window: events and questions are not ours
+const shownRpc = new Set();                   // permission questions that already have a card here
+let statusHook = null;
+/** Called (often) whenever the sessions' state is drawn: detach.js reports counts to the editor window. */
+export const setStatusHook = (fn) => { statusHook = fn; };
+/** Continuation of an answer that began in the other window: the next answer block belongs to it. */
+const takeCont = (rt) => { const m = rt.contM || null; rt.contM = null; return m; };
+
+/** Start keeping events aside (an editor window about to receive the chat back). */
+export function beginAdopt() { buffering = buffering || []; }
+/** Stop keeping events aside: apply them (nothing was handed over), or `drop` them (the other window has it all). */
+export function endAdopt(drop) { const b = buffering || []; buffering = null; if (!drop) for (const e of b) onSession(e); }
+
+/** Counts for the editor window's rail: how many sessions run, how many need the author. */
+export function summary() {
+  const run = tabs.filter((t) => busy(t.rt)).length;
+  const need = tabs.filter((t) => t.rt?.perms.size).length;
+  return { run, need, tabs: tabs.length, busyApi: tabs.some((t) => chatOf(t)?.busyId) };
+}
+/** True while a Claude Code turn runs in any tab (the window asks before closing). */
+export const anyBusy = () => tabs.some((t) => busy(t.rt));
+
+const plain = (o) => JSON.parse(JSON.stringify(o ?? null));
+function exportAct(a) {
+  return {
+    startedAt: a.startedAt, endedAt: a.endedAt, tokens: a.tokens, step: a.step, todos: plain(a.todos),
+    agents: [...a.agents.values()].map((g) => ({ ...plain({ ...g, logById: undefined }), logById: [...g.logById].map(([id, e]) => [id, g.log.indexOf(e)]) })),
+  };
+}
+function importAct(d) {
+  const a = { startedAt: d.startedAt, endedAt: d.endedAt, tokens: d.tokens, step: d.step, todos: d.todos || [], agents: new Map() };
+  for (const g of d.agents || []) {
+    const { logById, ...rest } = g;
+    const ag = { ...rest, logById: new Map() };
+    for (const [id, i] of logById || []) if (ag.log[i]) ag.logById.set(id, ag.log[i]);
+    a.agents.set(ag.key, ag);
+  }
+  return a;
+}
+const msgOut = (m) => ({ uuid: m.uuid, text: m.text, mode: m.mode, slot: !!m.slot, desc: m.ui?.desc || null });
+function exportRt(rt) {
+  return {
+    handle: rt.handle, status: rt.status, proc: rt.proc, claudeId: rt.claudeId, cwd: rt.cwd, model: rt.model, modelSeen: rt.modelSeen,
+    turnActive: rt.turnActive, serverQueue: plain(rt.serverQueue), transcript: plain(rt.transcript), act: exportAct(rt.act),
+    queue: rt.queue.filter((m) => !m.delivered).map(msgOut), pendingNow: [...rt.msgs.values()].filter((m) => !m.delivered && !rt.queue.includes(m)).map(msgOut),
+    ui: { open: !!rt.ui.open, sel: rt.ui.sel || null }, showActivity: rt.showActivity, stopRequested: rt.stopRequested, autoEdits: rt.autoEdits,
+    lastResult: plain(rt.lastResult), summary: plain(rt.summary), lastError: rt.lastError, limit: rt.limit, ranOnce: rt.ranOnce,
+    ui0: rt.ui0?.desc || null, toolParent: [...rt.toolParent], seq: seen.get(rt.handle) || 0,
+    // an answer is being written: the next block of it carries on in the new window
+    cont: !!(rt.turnActive && (rt.ui0?.desc || rt.lastSeg?.m?.ui?.desc)), contDesc: rt.lastSeg?.m?.ui?.desc || rt.ui0?.desc || null,
+  };
+}
+const cloneChat = (c) => plain({ history: c.history, summary: c.summary || "", summaryUpTo: c.summaryUpTo || 0, ctx: c.ctx, attached: c.attached, cc: c.cc, ccReady: c.ccReady, mem: c.mem, sid: c.sid, title: c.title, created: c.created, project: c.project });
+
+/**
+ * Settle every tab and describe it for another window. After this the window no longer owns the
+ * sessions (`released`): call it only when the other window is ready to take them (importState).
+ * Throws "BUSY_API" when an answer from an API provider is being written (that cannot move).
+ */
+export async function exportState({ release = true } = {}) {
+  if (tabs.some((t) => chatOf(t)?.busyId)) throw new Error("BUSY_API");
+  buffering = buffering || []; // from now on events wait: the window that takes over applies them, or we do if it does not
+  for (const t of tabs) if (t.rt?.seg) closeSeg(t.rt, false);
+  for (let round = 0; round < 3; round++) await Promise.all(tabs.map((t) => t.rt?.chain));
+  for (const t of tabs) if (t.rt) await flushDone(t.rt, []);
+  const snap = { v: 1, active: Math.max(0, tabs.indexOf(active)), tabs: [] };
+  for (const t of tabs) {
+    snap.tabs.push({ draft: t === active ? dom.text.value : t.draft || "", unseen: !!t.unseen, pendingTitle: t.pendingTitle || "", chat: cloneChat(chatOf(t)), rt: t.rt?.handle ? exportRt(t.rt) : null });
+  }
+  if (release) clearTabs();
+  return snap;
+}
+
+/** The sessions of this window moved: forget them (the processes keep running) and show an empty chat. */
+function clearTabs() {
+  for (const t of tabs) {
+    const rt = t.rt;
+    if (!rt) continue;
+    if (rt.handle) { released.add(rt.handle); byHandle.delete(rt.handle); }
+    for (const rpc of rt.perms.keys()) { cards.get(rpc)?.remove(); cards.delete(rpc); shownRpc.delete(rpc); }
+    clearTimeout(rt.doneTimer); clearTimeout(rt.writingTimer);
+    t.rt = null;
+  }
+  for (const t of tabs.slice(1)) t.list.remove();
+  tabs.length = 1;
+  active = tabs[0];
+  active.rt = null; active.chat = null; active.draft = ""; active.unseen = false; active.pendingTitle = "";
+  $$all(".ai-messages").forEach((l) => { if (l !== active.list) l.remove(); });
+  active.list.hidden = false; active.list.id = "ai-messages";
+  dom.text.value = "";
+  resetChat();
+  renderAll(true);
+}
+const $$all = (s) => [...document.querySelectorAll(s)];
+
+/** Take over the tabs another window described (exportState). Applies the events kept aside while waiting. */
+export async function importState(snap) {
+  const ai = await import("./ai.js");
+  const anchor = document.getElementById("ai-messages") || active.list;
+  for (const t of tabs) { if (t.rt?.handle) { byHandle.delete(t.rt.handle); } clearTimeout(t.rt?.doneTimer); }
+  for (const l of $$all(".ai-messages")) if (l !== anchor) l.remove();
+  anchor.innerHTML = "";
+  tabs.length = 0;
+  const made = [];
+  for (let i = 0; i < snap.tabs.length; i++) {
+    const d = snap.tabs[i];
+    const isActive = i === snap.active;
+    const list = isActive ? anchor : el("div", "ai-messages");
+    list.classList.add("ai-messages");
+    const tab = { id: `t${++seq}`, list, chat: null, rt: null, draft: d.draft || "", unseen: !!d.unseen, pendingTitle: d.pendingTitle || "" };
+    list.dataset.session = tab.id;
+    const c = { ...freshChatState(d.chat.project), ...d.chat, busyId: null, stop: null };
+    tab.chat = c;
+    tabs.push(tab);
+    made.push([tab, d]);
+  }
+  // order in the page: the active list stays where #ai-messages is, the others follow it (hidden)
+  let after = anchor;
+  for (const [tab] of made) if (tab.list !== anchor) { tab.list.hidden = true; tab.list.removeAttribute("id"); after.after(tab.list); after = tab.list; }
+  active = made[snap.active]?.[0] || tabs[0];
+  anchor.hidden = false; anchor.id = "ai-messages";
+  swapChat(active.chat); active.chat = null;
+  for (const [tab, d] of made) {
+    await ai.rebuildMessages(tab.list, chatOf(tab));
+    if (d.rt?.handle) importRt(tab, d.rt, ai);
+  }
+  dom.text.value = active.draft || "";
+  renderSessBar();
+  refreshAIContext();
+  // events that arrived while the state was on its way: only those newer than the state covers
+  const kept = buffering || [];
+  buffering = null;
+  for (const e of kept) if (e.handle && byHandle.has(e.handle) && (!e.seq || e.seq > (seen.get(e.handle) || 0))) onSession(e);
+  renderAll(true);
+}
+
+function importRt(tab, d, ai) {
+  const rt = makeRuntime(tab);
+  tab.rt = rt;
+  const c = chatOf(tab);
+  Object.assign(rt, {
+    handle: d.handle, status: d.status, proc: d.proc, claudeId: d.claudeId, cwd: d.cwd, model: d.model, modelSeen: d.modelSeen, turnActive: d.turnActive,
+    serverQueue: d.serverQueue || [], transcript: d.transcript || [], act: importAct(d.act), ui: { open: !!d.ui?.open, sel: d.ui?.sel || null },
+    showActivity: d.showActivity, stopRequested: d.stopRequested, autoEdits: d.autoEdits, lastResult: d.lastResult, summary: d.summary, lastError: d.lastError || "",
+    limit: !!d.limit, ranOnce: d.ranOnce, toolParent: new Map(d.toolParent || []),
+  });
+  const mk = (m) => ({ uuid: m.uuid, text: m.text, mode: m.mode, delivered: false, slot: !!m.slot, ui: m.desc ? ai.ccUiFor(m.desc, c.ctx) : rt.ui0 });
+  if (d.ui0) rt.ui0 = ai.ccUiFor(d.ui0, c.ctx);
+  for (const m of d.queue || []) { const x = mk(m); rt.msgs.set(x.uuid, x); rt.queue.push(x); }
+  for (const m of d.pendingNow || []) { const x = mk(m); rt.msgs.set(x.uuid, x); }
+  if (d.cont && d.contDesc) {
+    const ui = ai.ccUiFor(d.contDesc, c.ctx, true);
+    rt.ui0 = rt.ui0 || ui;
+    rt.contM = { uuid: uid(), text: d.contDesc.text, ui, delivered: true };
+  }
+  byHandle.set(rt.handle, rt);
+  released.delete(rt.handle);
+  seen.set(rt.handle, d.seq || 0);
+}
+
+/** The handles of every session this window runs (detach.js asks Rust to route their questions here). */
+export const handles = () => tabs.map((t) => t.rt?.handle).filter(Boolean);
+
+/** Stop every session of this window (the window is closing for good). */
+export async function stopAll() {
+  for (const t of [...tabs]) if (t.rt) await disposeRt(t.rt, true);
 }

@@ -38,6 +38,9 @@ mod windows;
 // [jupyter] mods
 mod jupyter;
 
+// [vault] mods
+mod vault;
+
 // [wsl] mods
 mod envs;
 
@@ -405,6 +408,14 @@ fn main() {
             windows::win_restore,
             windows::win_discard_previous,
 
+            // [detach] commands
+            windows::chat::win_chat_open,
+            windows::chat::win_chat_focus,
+            windows::chat::win_chat_close,
+            windows::chat::win_chat_pin,
+            windows::chat::win_send,
+            claude_code::session::cc_session_set_window,
+
             // [jupyter] commands
             jupyter::jp_interpreters,
             jupyter::jp_pip_install,
@@ -436,6 +447,9 @@ fn main() {
             envs::jupyter::envs_jp_list,
             envs::jupyter::envs_jp_install,
             envs::jupyter::envs_jp_venv,
+
+            // [vault] commands
+            vault::vault_open, vault::vault_close, vault::vault_sync, vault::vault_touch, vault::vault_notes, vault::vault_resolve, vault::vault_resolve_many, vault::vault_headings, vault::vault_blocks, vault::vault_tags, vault::vault_tag_notes, vault::vault_backlinks, vault::vault_outgoing, vault::vault_embed, vault::vault_graph, vault::vault_link_text, vault::vault_unique, vault::vault_rename_plan, vault::vault_rename_apply, vault::vault_undo, vault::vault_props_get, vault::vault_props_set, vault::vault_props_remove, vault::vault_props_rename, vault::vault_ai_context,
 
             // [ssh] commands
             ssh::ssh_answer,

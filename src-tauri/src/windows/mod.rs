@@ -4,8 +4,9 @@
 //! creates windows, handles closing, remembers the window list for restoring after a crash, and
 //! lowers WebView2's memory for minimised windows (`mem.rs`).
 //!
-//! A window has a `role` ("editor" today) so a later feature (the AI chat in its own window) can
-//! register windows of another kind in the same registry.
+//! A window has a `role`: "editor" for the folder windows, "chat" for the AI chat popped out of an
+//! editor window (`chat.rs`; its label is `chat-<parent label>` and `parent` names the editor).
+pub mod chat;
 pub mod mem;
 pub mod route;
 
@@ -21,6 +22,7 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindo
 
 pub const MAIN: &str = "main";
 pub const ROLE_EDITOR: &str = "editor";
+pub const ROLE_CHAT: &str = "chat";
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -33,6 +35,9 @@ pub struct Saved {
     pub bounds: Option<[i32; 4]>,
     #[serde(default)]
     pub layout: Value,
+    /// a chat window: the editor window it belongs to
+    #[serde(default)]
+    pub parent: Option<String>,
 }
 
 struct WinState {
@@ -46,11 +51,12 @@ struct WinState {
     ready: bool,
     pending: Vec<(String, Option<u32>)>,
     low_memory: bool,
+    parent: Option<String>,
 }
 
 impl WinState {
     fn new(role: &str) -> Self {
-        WinState { role: role.into(), folder: None, files: vec![], focused_at: 0, bounds: None, layout: Value::Null, ready: false, pending: vec![], low_memory: false }
+        WinState { role: role.into(), folder: None, files: vec![], focused_at: 0, bounds: None, layout: Value::Null, ready: false, pending: vec![], low_memory: false, parent: None }
     }
     fn as_win(&self, label: &str) -> Win {
         Win { label: label.into(), folder: self.folder.clone(), files: self.files.clone(), focused_at: self.focused_at }
@@ -63,9 +69,11 @@ struct Registry {
     next: u32,
     /// the window list of the last run (read at start, before this run overwrites the file)
     prev: Vec<Saved>,
+    /// where each editor window's chat window was last (logical x, y, width, height), by parent label
+    chat_bounds: BTreeMap<String, [i32; 4]>,
 }
 
-static REG: Mutex<Registry> = Mutex::new(Registry { wins: BTreeMap::new(), seq: 0, next: 2, prev: Vec::new() });
+static REG: Mutex<Registry> = Mutex::new(Registry { wins: BTreeMap::new(), seq: 0, next: 2, prev: Vec::new(), chat_bounds: BTreeMap::new() });
 static PERSIST_QUEUED: AtomicBool = AtomicBool::new(false);
 /// windows that handed a close request to the UI and wait for the answer
 static CLOSE_PENDING: Mutex<Option<HashMap<String, Instant>>> = Mutex::new(None);
@@ -79,6 +87,10 @@ pub fn is_app_window(label: &str) -> bool {
     label == MAIN || label.starts_with("w-")
 }
 
+pub fn is_chat_window(label: &str) -> bool {
+    label.starts_with("chat-")
+}
+
 fn windows_file(app: &AppHandle) -> std::path::PathBuf {
     crate::settings::data_dir(app).join("windows.json")
 }
@@ -87,11 +99,9 @@ fn windows_file(app: &AppHandle) -> std::path::PathBuf {
 
 /// Called once from setup: registers the main window and reads the previous run's window list.
 pub fn init(app: &AppHandle) {
-    let prev: Vec<Saved> = std::fs::read_to_string(windows_file(app))
-        .ok()
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .and_then(|v| serde_json::from_value(v["windows"].clone()).ok())
-        .unwrap_or_default();
+    let file: Option<Value> = std::fs::read_to_string(windows_file(app)).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok());
+    let prev: Vec<Saved> = file.as_ref().and_then(|v| serde_json::from_value(v["windows"].clone()).ok()).unwrap_or_default();
+    let bounds: BTreeMap<String, [i32; 4]> = file.as_ref().and_then(|v| serde_json::from_value(v["chatBounds"].clone()).ok()).unwrap_or_default();
     let mut r = reg();
     r.wins.entry(MAIN.into()).or_insert_with(|| WinState::new(ROLE_EDITOR));
     // labels of the last run stay reserved so a restored window never clashes with a new one
@@ -100,7 +110,8 @@ pub fn init(app: &AppHandle) {
             r.next = r.next.max(n + 1);
         }
     }
-    r.prev = prev.into_iter().filter(|s| s.label != MAIN && is_app_window(&s.label)).collect();
+    r.chat_bounds = bounds;
+    r.prev = prev.into_iter().filter(|s| s.label != MAIN && (is_app_window(&s.label) || is_chat_window(&s.label))).collect();
 }
 
 /// Write the window list soon (several changes in a burst make one write).
@@ -117,18 +128,20 @@ fn persist_later(app: &AppHandle) {
 }
 
 fn persist_now(app: &AppHandle) {
-    let list: Vec<Saved> = {
+    let (list, chat_bounds): (Vec<Saved>, BTreeMap<String, [i32; 4]>) = {
         let r = reg();
-        r.wins
-            .iter()
-            .filter(|(_, w)| w.role == ROLE_EDITOR)
-            .map(|(l, w)| Saved { label: l.clone(), role: w.role.clone(), folder: w.folder.clone(), bounds: w.bounds, layout: w.layout.clone() })
-            .collect()
+        (
+            r.wins
+                .iter()
+                .map(|(l, w)| Saved { label: l.clone(), role: w.role.clone(), folder: w.folder.clone(), bounds: w.bounds, layout: w.layout.clone(), parent: w.parent.clone() })
+                .collect(),
+            r.chat_bounds.clone(),
+        )
     };
     let p = windows_file(app);
     let _ = std::fs::create_dir_all(p.parent().unwrap_or(std::path::Path::new(".")));
     let tmp = p.with_extension("json.tmp");
-    if let Ok(bytes) = serde_json::to_vec_pretty(&json!({ "version": 1, "windows": list })) {
+    if let Ok(bytes) = serde_json::to_vec_pretty(&json!({ "version": 1, "windows": list, "chatBounds": chat_bounds })) {
         if std::fs::write(&tmp, bytes).is_ok() {
             let _ = std::fs::rename(&tmp, &p);
         }
@@ -177,10 +190,18 @@ fn enc(s: &str) -> String {
 
 /// Make a window. Its page reads `win`, `open`, `folder` and `restore` from the query.
 fn create(app: &AppHandle, label: &str, folder: Option<&str>, open: Option<&str>, restore: bool, near: Option<&WebviewWindow>, bounds: Option<[i32; 4]>) -> CmdResult<()> {
+    create_as(app, label, None, folder, open, restore, near, bounds)
+}
+
+/// `chat_of`: Some(parent label) makes a chat window (the AI panel on its own) for that editor window.
+pub(crate) fn create_as(app: &AppHandle, label: &str, chat_of: Option<&str>, folder: Option<&str>, open: Option<&str>, restore: bool, near: Option<&WebviewWindow>, bounds: Option<[i32; 4]>) -> CmdResult<()> {
     if app.get_webview_window(label).is_some() {
         return Ok(());
     }
     let mut q = format!("index.html?win={}", enc(label));
+    if let Some(p) = chat_of {
+        q += &format!("&role=chat&parent={}", enc(p));
+    }
     if let Some(o) = open {
         q += &format!("&open={}", enc(o));
     }
@@ -192,13 +213,14 @@ fn create(app: &AppHandle, label: &str, folder: Option<&str>, open: Option<&str>
     }
     let mut b = WebviewWindowBuilder::new(app, label, WebviewUrl::App(q.into()))
         .title("Callio")
-        .min_inner_size(720.0, 460.0)
+        .min_inner_size(if chat_of.is_some() { 360.0 } else { 720.0 }, 460.0)
         .zoom_hotkeys_enabled(true)
         .visible(false);
     // size and place: the saved bounds, else the asking window's, shifted a little
     let mut placed = false;
     if let Some([x, y, w, h]) = bounds {
-        b = b.inner_size(w.max(720) as f64, h.max(460) as f64).position(x as f64, y as f64);
+        let min_w = if chat_of.is_some() { 360 } else { 720 };
+        b = b.inner_size(w.max(min_w) as f64, h.max(460) as f64).position(x as f64, y as f64);
         placed = true;
     } else if let Some(n) = near {
         if let (Ok(p), Ok(s), Ok(f)) = (n.outer_position(), n.inner_size(), n.scale_factor()) {
@@ -369,9 +391,12 @@ pub async fn win_route(app: AppHandle, window: WebviewWindow, path: String, line
 pub fn win_report(app: AppHandle, window: WebviewWindow, folder: Option<String>, files: Vec<String>, layout: Option<Value>) {
     {
         let mut r = reg();
-        let w = r.wins.entry(window.label().to_string()).or_insert_with(|| WinState::new(ROLE_EDITOR));
-        w.folder = folder;
-        w.files = files;
+        let w = r.wins.entry(window.label().to_string()).or_insert_with(|| WinState::new(if is_chat_window(window.label()) { ROLE_CHAT } else { ROLE_EDITOR }));
+        if w.role != ROLE_CHAT {
+            // (a chat window shows no folder or files of its own: the AI panel only; its layout is kept)
+            w.folder = folder;
+            w.files = files;
+        }
         if let Some(l) = layout {
             w.layout = l;
         }
@@ -404,12 +429,13 @@ pub struct WinInfo {
     folder: Option<String>,
     files: Vec<String>,
     me: bool,
+    parent: Option<String>,
 }
 
 #[tauri::command]
 pub fn win_list(window: WebviewWindow) -> Vec<WinInfo> {
     let r = reg();
-    r.wins.iter().map(|(l, w)| WinInfo { label: l.clone(), role: w.role.clone(), folder: w.folder.clone(), files: w.files.clone(), me: l == window.label() }).collect()
+    r.wins.iter().map(|(l, w)| WinInfo { label: l.clone(), role: w.role.clone(), folder: w.folder.clone(), files: w.files.clone(), me: l == window.label(), parent: w.parent.clone() }).collect()
 }
 
 #[tauri::command]
@@ -440,21 +466,28 @@ pub fn win_previous() -> Vec<Saved> {
 /// Re-create the windows of the last run; each restores its own tabs (`restore=1`).
 #[tauri::command]
 pub async fn win_restore(app: AppHandle, window: WebviewWindow) -> CmdResult<usize> {
-    let prev = std::mem::take(&mut reg().prev);
+    let mut prev = std::mem::take(&mut reg().prev);
+    // editor windows first: a chat window needs its editor window
+    prev.sort_by_key(|s| s.role == ROLE_CHAT);
     let mut n = 0;
     for s in prev {
         if app.get_webview_window(&s.label).is_some() {
             continue;
         }
+        let chat_of = if s.role == ROLE_CHAT { s.parent.clone().filter(|p| app.get_webview_window(p).is_some()) } else { None };
+        if s.role == ROLE_CHAT && chat_of.is_none() {
+            continue; // its editor window did not come back
+        }
         {
             let mut r = reg();
-            let mut st = WinState::new(&s.role);
+            let mut st = WinState::new(if chat_of.is_some() { ROLE_CHAT } else { ROLE_EDITOR });
             st.folder = s.folder.clone();
             st.bounds = s.bounds;
             st.layout = s.layout.clone();
+            st.parent = chat_of.clone();
             r.wins.insert(s.label.clone(), st);
         }
-        if create(&app, &s.label, s.folder.as_deref(), None, true, Some(&window), s.bounds).is_ok() {
+        if create_as(&app, &s.label, chat_of.as_deref(), s.folder.as_deref(), None, true, Some(&window), s.bounds).is_ok() {
             n += 1;
         } else {
             reg().wins.remove(&s.label);
@@ -475,6 +508,9 @@ pub fn win_discard_previous(app: AppHandle) {
 /// Close handling, focus order, bounds and memory level. Called for every window event.
 pub fn on_event(window: &tauri::Window, event: &WindowEvent) {
     let label = window.label().to_string();
+    if is_chat_window(&label) {
+        return chat::on_event(window, event);
+    }
     if !is_app_window(&label) {
         return; // helper windows (Overleaf sign-in…) close normally
     }
@@ -522,6 +558,8 @@ pub fn on_event(window: &tauri::Window, event: &WindowEvent) {
             }
         }
         WindowEvent::Destroyed => {
+            // its AI chat window goes with it
+            chat::close_children(app, &label);
             reg().wins.remove(&label);
             crate::watch::drop_for(&label);
             if let Some(m) = CLOSE_PENDING.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {

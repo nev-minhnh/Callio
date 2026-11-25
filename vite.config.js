@@ -34,6 +34,29 @@ function devBridge() {
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify(await p));
       });
+      // [vault] the vault index (src-tauri/src/vault/*.rs, built as a small stand-alone program, see
+      // /root/specs/tests/vault/rs): same code as the app, so browser tests exercise the real resolver
+      let vproc = null, vbuf = "", vseq = 1;
+      const vwait = new Map();
+      const vault = () => {
+        if (vproc) return vproc;
+        vproc = spawn(process.env.CALLIO_VAULT || "/root/specs/bin/vaultcli", [], { stdio: ["pipe", "pipe", "inherit"] });
+        vproc.on("exit", () => { vproc = null; for (const [id, r] of vwait) r({ id, ok: false, error: "vault engine stopped" }); vwait.clear(); });
+        vproc.stdout.on("data", (d) => { vbuf += d; let i; while ((i = vbuf.indexOf("\n")) >= 0) { const line = vbuf.slice(0, i); vbuf = vbuf.slice(i + 1); try { const v = JSON.parse(line); vwait.get(v.id)?.(v); vwait.delete(v.id); } catch {} } });
+        return vproc;
+      };
+      server.middlewares.use("/__vault", async (req, res) => {
+        const { cmd, args } = JSON.parse(await body(req));
+        const id = vseq++;
+        const p = new Promise((r) => vwait.set(id, r));
+        vault().stdin.write(JSON.stringify({ id, cmd, args }) + "\n");
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify(await p));
+      });
+      server.middlewares.use("/__mv", (req, res) => {
+        const q = new URL(req.url, "http://x").searchParams;
+        try { fs.mkdirSync(q.get("to").replace(/\/[^/]*$/, ""), { recursive: true }); fs.renameSync(q.get("from"), q.get("to")); res.end("ok"); } catch (e) { res.statusCode = 400; res.end(String(e)); }
+      });
       // the draw.io editor, from the same zip the app ships (src-tauri/src/drawio.rs)
       let dz = null;
       server.middlewares.use("/__drawio", async (req, res) => {

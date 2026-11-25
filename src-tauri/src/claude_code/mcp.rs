@@ -45,28 +45,35 @@ pub struct Server {
     pub token: String,
 }
 
-static PENDING: Mutex<Option<HashMap<u64, oneshot::Sender<Value>>>> = Mutex::new(None);
+/// An open question: where the answer goes, and what was asked (to ask again when the session's
+/// window changes).
+struct Open {
+    tx: oneshot::Sender<Value>,
+    msg: Value,
+}
+static PENDING: Mutex<Option<HashMap<u64, Open>>> = Mutex::new(None);
 static SEQ: AtomicU64 = AtomicU64::new(1);
 
 /// Answer from the window to a "cc-rpc" request.
 pub fn reply(rpc: u64, value: Value) {
-    if let Some(tx) = PENDING.lock().unwrap().as_mut().and_then(|m| m.remove(&rpc)) {
-        let _ = tx.send(value);
+    if let Some(o) = PENDING.lock().unwrap().as_mut().and_then(|m| m.remove(&rpc)) {
+        let _ = o.tx.send(value);
     }
 }
 
 /// Decline every open question (used when a run is stopped).
 pub fn cancel_all() {
     let drained: Vec<_> = PENDING.lock().unwrap().as_mut().map(|m| m.drain().collect()).unwrap_or_default();
-    for (_, tx) in drained {
-        let _ = tx.send(json!({"allow": false, "message": "Stopped by the user"}));
+    for (_, o) in drained {
+        let _ = o.tx.send(json!({"allow": false, "message": "Stopped by the user"}));
     }
 }
 
 async fn ask_window(app: &AppHandle, method: &str, params: Value, timeout: Duration) -> Option<Value> {
     let rpc = SEQ.fetch_add(1, Ordering::SeqCst);
     let (tx, rx) = oneshot::channel();
-    PENDING.lock().unwrap().get_or_insert_with(HashMap::new).insert(rpc, tx);
+    let msg = json!({"rpc": rpc, "method": method, "params": params});
+    PENDING.lock().unwrap().get_or_insert_with(HashMap::new).insert(rpc, Open { tx, msg: msg.clone() });
     // Removes the question and its card however this ends — answered, timed out, or
     // dropped because Claude Code went away.
     struct Guard<'a> {
@@ -87,7 +94,6 @@ async fn ask_window(app: &AppHandle, method: &str, params: Value, timeout: Durat
     let mut g = Guard { app, rpc, answered: false };
     // a session's question goes to the window that owns the session; anything else to the window being used
     let owner = params["session"].as_str().and_then(crate::claude_code::session::window_of);
-    let msg = json!({"rpc": rpc, "method": method, "params": params});
     match owner {
         Some(w) => { let _ = app.emit_to(w, "cc-rpc", msg); }
         None => crate::windows::emit_app(app, "cc-rpc", msg),
@@ -95,6 +101,19 @@ async fn ask_window(app: &AppHandle, method: &str, params: Value, timeout: Durat
     let r = tokio::time::timeout(timeout, rx).await.ok().and_then(|r| r.ok());
     g.answered = r.is_some();
     r
+}
+
+/// Ask the still-open questions of a session again, in `label` (its chat moved to that window).
+pub fn reemit_pending(app: &AppHandle, handle: &str, label: &str) {
+    let open: Vec<Value> = PENDING
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|m| m.values().filter(|o| o.msg["params"]["session"].as_str() == Some(handle)).map(|o| o.msg.clone()).collect())
+        .unwrap_or_default();
+    for msg in open {
+        let _ = app.emit_to(label.to_string(), "cc-rpc", msg);
+    }
 }
 
 pub fn random_token() -> String {

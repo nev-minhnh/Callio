@@ -5,6 +5,7 @@ import "katex/dist/katex.min.css";
 import hljs from "highlight.js/lib/common";
 import DOMPurify from "dompurify";
 import { fileSrc } from "./api.js";
+import { V } from "./vault-state.js";
 
 // Memoise KaTeX: re-rendering every equation on each keystroke is the main cost.
 const cache = new Map();
@@ -75,6 +76,11 @@ md.renderer.rules.html_block = (tokens, idx, o, env, self) => {
   return defaultHtmlBlock ? defaultHtmlBlock(tokens, idx, o, env, self) : t.content;
 };
 
+/** The preview's markdown-it, for vault mode to add its Obsidian rules to (src/vault-md.js). */
+export const mdParser = md;
+// [vault] the main preview of a vault window gets Obsidian's syntax; everything else renders as before
+const vaultEnv = (container) => (V.on && container?.id === "md-preview" ? { vault: true } : {});
+
 let baseDir = "";
 const isAbs = (u) => /^[a-z][a-z0-9+.-]*:|^\/\/|^#/i.test(u);
 function resolveLocal(src) {
@@ -95,9 +101,9 @@ md.renderer.rules.image = (tokens, idx, o, env, self) => {
 const stripLines = (s) => s.replace(/ data-line="\d+"/g, "");
 
 /** Sanitized HTML for a piece of Markdown (notebook cells). */
-export function mdToHtml(text, dir) {
+export function mdToHtml(text, dir, env = {}) {
   baseDir = dir || "";
-  return DOMPurify.sanitize(md.render(text || ""), {
+  return DOMPurify.sanitize(md.render(text || "", { ...env }), {
     ADD_ATTR: ["target", "loading"],
     FORBID_TAGS: ["style", "form", "iframe", "object", "embed", "base", "meta", "link"],
   });
@@ -112,7 +118,7 @@ export function renderMarkdown(container, text, dir) {
   if (paged) unpage(container);
   baseDir = dir || "";
   // Markdown may contain raw HTML: sanitize so a hostile file can't run script.
-  const html = DOMPurify.sanitize(md.render(text), {
+  const html = DOMPurify.sanitize(md.render(text, vaultEnv(container)), {
     ADD_ATTR: ["target", "loading"],
     FORBID_TAGS: ["style", "form", "iframe", "object", "embed", "base", "meta", "link"],
   });

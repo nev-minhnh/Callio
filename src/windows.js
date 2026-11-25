@@ -15,6 +15,10 @@ const q = new URLSearchParams(location.search);
 /** "main" for the first window, "w-2", "w-3"… for the others. */
 export const winLabel = q.get("win") || "main";
 export const isMain = winLabel === "main";
+/** The AI chat popped out of an editor window (detach.js): this page shows only the AI panel. */
+export const isChat = q.get("role") === "chat";
+/** For a chat window, the editor window it belongs to. */
+export const parentLabel = q.get("parent") || (isChat ? winLabel.replace(/^chat-/, "") : null);
 export const winQuery = { open: q.get("open") || null, folder: q.get("folder") || null, restore: q.get("restore") === "1" };
 
 /** What belongs to one window and never to the shared settings. Add future per-window keys here. */
@@ -44,7 +48,8 @@ export async function bootSettings(shared) {
   if (isMain) return shared;
   let layout = null;
   try { layout = (await call("win_boot"))?.layout; } catch {}
-  if (!layout || typeof layout !== "object" || !Object.keys(layout).length) layout = NEW_WINDOW_LAYOUT;
+  if (!layout || typeof layout !== "object" || !Object.keys(layout).length) layout = isChat ? { sidebar: false, aiPanel: true } : NEW_WINDOW_LAYOUT;
+  if (isChat) layout = { ...layout, sidebar: false, aiPanel: true }; // [detach] a chat window is always its AI panel
   return { ...shared, ...layout };
 }
 
@@ -90,7 +95,7 @@ export async function routeElsewhere(path, line) {
 
 /** Number of other Callio windows open. */
 export async function otherWindows() {
-  try { return (await call("win_list")).filter((w) => !w.me).length; } catch { return 0; }
+  try { return (await call("win_list")).filter((w) => !w.me && w.role !== "chat").length; } catch { return 0; }
 }
 
 /** Close this window after the user settled unsaved files. The last window quits the app. */

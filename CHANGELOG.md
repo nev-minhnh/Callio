@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.21.0
+
+### AI chat in its own window
+- **AI chat in its own window.** "Tách ra cửa sổ riêng" / "Pop out" (button in the AI panel toolbar, the ⋯ menu, or Ctrl+Shift+L while the cursor is in the AI panel) moves the whole AI panel into a separate window, titled "Callio — AI · <folder>". Put it on a second monitor; its size and place are remembered for each editor window.
+- Running Claude Code sessions keep running while you pop the chat out or attach it back: nothing is restarted, no message is lost or doubled, and an approval question that arrives during the move is shown again in the new place.
+- The chat window is the full AI panel for its editor window. The current selection and file stay in context and update as you move the cursor; "Add to chat", file links, Apply / diff / Undo, Insert at cursor and compile results all go to the editor window, which opens the file and shows the diff there. Permission questions from Claude Code appear in the window the session belongs to.
+- "Gắn lại" / "Attach back" (Ctrl+Shift+D) or simply closing the chat window puts the chat back into the editor window with the panel open. While the chat is out the editor shows a slim rail with an attach button and dots for running / needs-you sessions, and its AI button focuses the chat window. Closing the editor window closes its chat window too (and asks first if a turn is running).
+- A pin button keeps the chat window on top of the other windows.
+- After an unexpected exit, Callio restores the chat window next to its editor window.
+
+### Obsidian vault mode
+- Open a folder that contains `.obsidian/` (or the vault connected in Settings) and Callio switches to vault mode: an "Obsidian vault · name" chip, `.obsidian` and the trash folder hidden, and nothing is ever written into `.obsidian/`. Callio reads `app.json` (attachment folder, where new notes go, Markdown vs wiki links, "always update links"), `daily-notes.json` and `templates.json`.
+- Wiki links of every form (`[[Note]]`, `[[Folder/Note]]`, `[[Note#Heading]]`, `[[Note#^block]]`, `[[Note|alias]]`, `![[embed]]`) resolve the way Obsidian does (shortest unique path, aliases for search). Ctrl+click in the editor, or a click in the preview, opens the note and jumps to the heading or block; a link to a missing note asks before creating it. Hovering a link shows a preview card.
+- Autocomplete for `[[`, `[[Note#`, `[[Note#^`, `![[` (notes and files) and `#tags`; with "Use Markdown links" on, Callio inserts `[text](path)` instead.
+- Preview renders callouts (including foldable `[!note]-` / `+`), note, image, PDF (`#page=N`), audio and video embeds, `==highlights==`, `%%comments%%`, task statuses, footnotes, math and Mermaid.
+- Properties: the YAML front matter becomes a typed form (text, number, checkbox, date, list chips) in the preview header and in the visual editor; add, rename and remove properties. Only the lines you edit change — the rest of the YAML stays byte for byte.
+- Paste or drop an image: it is saved in the vault's attachment folder as `Pasted image YYYYMMDDHHmmss.png` and `![[…]]` is inserted.
+- Renaming or moving a note or folder lists the links that will change, updates them in one step and shows an Undo that puts every note back (only notes you haven't edited since).
+- New "Vault" side panel: backlinks (linked and unlinked mentions with a "Link" button), outgoing links, a tags tree with counts (click to list the notes), and a small local graph. Daily note button (creates it from your template), Insert template, and a quick switcher on Ctrl+O.
+- AI: the assistant sees the open note's links and backlinks (only folders it is allowed to read), and the MCP server gains `vault_backlinks`, `vault_resolve` and `vault_tags`.
+
 ## 0.20.0
 
 - Remote servers over SSH (Settings → Remote servers / Máy chủ SSH): Callio reads the Host entries of your ~/.ssh/config and lets you add servers of its own. Sign-in by ssh-agent, key file (passphrase asked once, optionally remembered), password or a keyboard-interactive code (OTP / 2-step). Passwords and passphrases live in Windows Credential Manager only. "Test" shows the server's system and whether it has Python, jupyter_server, rsync and Claude Code. Servers flagged "needs VPN" say so when they can't be reached.

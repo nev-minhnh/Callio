@@ -71,6 +71,7 @@ const ccReplies = new Map();
 
 export async function invoke(cmd, a, opts) {
   await new Promise((r) => setTimeout(r, 30));
+  if (window.__mockForward) { const f = await window.__mockForward(cmd, a, opts); if (f) return f.value; } // [detach] a second page (the chat window) borrows this mock backend from the first
   // the dev bridge (vite.config.js): the real office engine and real files under /
   const real = (p) => typeof p === "string" && p.startsWith("/");
   if (cmd === "write_binary" && opts?.headers?.["x-path"]) {

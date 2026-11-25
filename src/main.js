@@ -67,7 +67,7 @@ import { initHistory, record as historyRecord, refreshHistoryPanel } from "./his
 // [windows] the AI panel, inline suggestions and the writing assistant load when first needed (at once in the
 // first window; in an extra window, only when its AI panel opens or one of them is asked for)
 let aiLoading = null;
-const ensureAI = () => (aiLoading ??= Promise.all([import("./ai.js"), import("./ai-inline.js"), import("./writing.js")]).then(([ai, inl, wr]) => {
+export const ensureAI = () => (aiLoading ??= Promise.all([import("./ai.js"), import("./ai-inline.js"), import("./writing.js")]).then(([ai, inl, wr]) => {
   ai.initAI(); inl.initInline(); wr.initWriting();
   import("./cc-quota.js").then((m) => m.initQuota());
   if (settings.ccEnabled) import("./cc-sessions.js").then((m) => m.initSessions()); // [chat-core]
@@ -90,6 +90,8 @@ import { guessIndent } from "./structured.js";
 import { isReviewing, endReview, setKindGetter, refreshExtraExtensions, addEditorExtension, reapplyExtras, editorLineTop, replaceDocAsStep, undoList, undoSteps } from "./editor.js";
 import { ic } from "./icons.js";
 import { fileBadge, isHiddenName, categoryOf } from "./filetypes.js";
+import { V as vaultState } from "./vault-state.js"; // [vault]
+const vaultOn = () => vaultState.on;
 import { loading, withLoading } from "./loading.js";
 import { showContextMenu } from "./ctxmenu.js";
 
@@ -304,9 +306,12 @@ async function renameTab(t) {
   const name = (await ask({ title: "Rename", text: `New name for ${t.name}`, input: t.name }))?.trim();
   if (!name || name === t.name) return;
   if (t.dirty && !(await saveTab(t))) return;
+  const g = await guardMoves([[t.path, dirname(t.path) + "/" + name]]); // [vault]
+  if (!g.ok) return;
   try {
     const to = await api.renamePath(t.path, name, folder || dirname(t.path));
     await retargetTabs(t.path, to);
+    await g.done();
     status(`Renamed to ${name}`, "ok");
     refreshTree();
   } catch (e) { status(`Couldn't rename ${t.name}: ${e.message || e}`, "err"); }
@@ -509,6 +514,7 @@ export async function activate(id) {
   if (!isPdf) updateCursor(t.state);
   else { $("#st-pos").textContent = ""; $("#st-words").textContent = ""; }
   highlightTree();
+  window.dispatchEvent(new CustomEvent("callio-active", { detail: t })); // [vault]
   if (!$("#side-history").hidden) refreshHistoryPanel();
   $("#st-path").textContent = t.path || "Unsaved file";
   $("#st-kind").textContent = { tex: "LaTeX", md: "Markdown", bib: "BibTeX", text: languageName(t), pdf: "PDF", ipynb: "Jupyter notebook", doc: "Word document", sheet: "Spreadsheet", deck: "Presentation", image: "Picture", drawio: "draw.io diagram", mermaid: "Mermaid diagram", html: "HTML", media: "Media", json: "JSON", xml: "XML", yaml: "YAML", csv: t.delim === "\t" ? "TSV" : "CSV" }[t.kind];
@@ -860,6 +866,7 @@ async function saveTab(t, saveAs = false) {
   t.path = path; t.name = basename(path); t.saved = raw; t.dirty = false; t.metaDirty = false;
   text = raw;
   historyRecord(t, text, "Saved", "save");
+  window.dispatchEvent(new CustomEvent("callio-saved", { detail: path })); // [vault]
   if (renamed) {
     const k = kindOf(path);
     if (k !== t.kind) { t.kind = k; if (k === "csv") t.delim = detectDelimiterFor(text, path); t.state = createState(text, k, { delim: t.delim }); if (t.id === activeId) { setState(t.state); activeId = null; await activate(t.id); } if (["json", "xml", "yaml", "text", "html"].includes(k)) loadLanguage(path).then((ext) => ext && setTabLanguage(t, ext)); }
@@ -923,6 +930,19 @@ function renderRecent() {
     el.onclick = () => openPath(p);
     box.appendChild(el);
   }
+}
+
+// [vault] a hook the vault module sets: asked before a file or folder is renamed or moved, and
+// afterwards rewrites the links to it. Returns { ok, done } (see vault-ui.js guardMoves).
+let moveGuard = null;
+export function setMoveGuard(f) { moveGuard = f; }
+const guardMoves = async (pairs) => (moveGuard ? moveGuard(pairs) : { ok: true, done: async () => {} });
+/** Move or rename one path back (open tabs follow it): used to undo a rename. */
+export async function movePathTo(from, to) {
+  const dir = dirname(to);
+  if (norm(dirname(from)) === norm(dir)) await retargetTabs(from, await api.renamePath(from, basename(to), folder || dir));
+  else { const r = await call("fs_move", { root: folder, paths: [from], dest: dir }); for (const [a, b] of r.moved) await retargetTabs(a, b); }
+  await refreshTree();
 }
 
 // ---------------- file tree ----------------
@@ -1180,9 +1200,12 @@ async function moveInto(paths, dir) {
   if (!moving.length) return;
   // unsaved edits are saved first, so nothing is lost in the move
   for (const p of moving) for (const t of tabsUnder(p)) if (t.dirty && !(await saveTab(t))) return;
+  const g = await guardMoves(moving.map((p) => [p, dir.replace(/[\\/]+$/, "") + "/" + basename(p)])); // [vault]
+  if (!g.ok) return;
   const r = await call("fs_move", { root: folder, paths: moving, dest: dir });
   // tabs follow everything that did move, even when a later item failed
   for (const [from, to] of r.moved) await retargetTabs(from, to);
+  await g.done();
   if (norm(dir) !== norm(folder)) expanded.add(dir);
   await refreshTree();
   if (r.moved.length) { revealInTree(r.moved[0][1]); status(`Moved ${r.moved.length > 1 ? r.moved.length + " items" : basename(r.moved[0][0])} to ${basename(dir)}`, "ok"); }
@@ -1407,9 +1430,12 @@ function startRename(it, el) {
     // an open file with unsaved edits is saved first, so nothing is lost in the move
     const open = tabsUnder(it.path);
     for (const t of open) if (t.dirty && !(await saveTab(t))) { input.replaceWith(nm); return; }
+    const g = await guardMoves([[it.path, dirname(it.path) + "/" + name]]); // [vault]
+    if (!g.ok) { input.replaceWith(nm); return; }
     try {
       const to = await api.renamePath(it.path, name, folder || dirname(it.path));
       await retargetTabs(it.path, to);
+      await g.done();
       status(`Renamed to ${name}`, "ok");
     } catch (er) { toast(er.message, "err"); }
     refreshTree();
@@ -1549,6 +1575,7 @@ function onDocChanged(immediate = false) {
       if (activeTab() !== t) return;
       const text = getView().state.doc.toString();
       m.renderMarkdown(mdEl, text, t.path ? dirname(t.path) : "");
+      if (vaultOn()) import("./vault-md.js").then((v) => { v.wirePreview(mdEl); v.hydrate(mdEl); }); // [vault]
       updateMirror(t);
       if (settings.syncScroll) syncPreview();
       // [@key] citations: formatted with the chosen CSL style once typing pauses
@@ -2139,7 +2166,7 @@ let wordsTimer;
 let aiCtxTimer;
 function updateCursor(state) {
   csvFollowCursor(state);
-  if (!$("#ai-panel").hidden) { clearTimeout(aiCtxTimer); aiCtxTimer = setTimeout(refreshAIContext, 250); }
+  if (!$("#ai-panel").hidden || document.documentElement.classList.contains("chat-detached")) { clearTimeout(aiCtxTimer); aiCtxTimer = setTimeout(refreshAIContext, 250); } // [detach] the chat window follows the cursor too
   const head = state.selection.main.head;
   const line = state.doc.lineAt(head);
   const sel = state.selection.main;
@@ -2667,7 +2694,8 @@ document.addEventListener("keydown", (e) => {
   if (k === "p" && !e.shiftKey && activeTab()) return run(() => printTab(activeTab()));
   if (k === "j" && e.altKey) return run(forwardSync);
   if (k === "l" && !e.shiftKey) return run(() => toggleAIPanel());
-  if (k === "l" && e.shiftKey) return run(openLibraryWindow);
+  // [detach] Ctrl+Shift+L pops the AI panel out when you are in it (else it is the paper library, as before)
+  if (k === "l" && e.shiftKey) return run(() => (document.activeElement?.closest?.("#ai-panel") ? import("./detach.js").then((m) => m.toggleDetached()) : openLibraryWindow()));
   if (k === "." && !e.shiftKey) return run(() => {
     const v = getView(); const c = v.coordsAtPos(v.state.selection.main.head);
     openActionMenu(c ? c.left : 200, c ? c.bottom + 6 : 200);
@@ -3054,18 +3082,22 @@ async function boot() {
   if (import.meta.env?.DEV) window.__wys = () => wys;
   if (import.meta.env?.DEV) import(/* @vite-ignore */ import.meta.url).then((m) => { window.__main = m; }); // tests: this very module (not a second copy)
   // [windows] AI: at once in the first window and in any window that starts with its AI panel open
-  if (win.isMain || settings.aiPanel) await ensureAI();
+  if (win.isChat) await (await import("./detach.js")).bootChat(); // [detach] the AI panel on its own, for its editor window
+  else if (win.isMain || settings.aiPanel) await ensureAI();
   // [chat-core] init
   // (Claude Code sessions start with the AI panel's modules — see ensureAI — so an extra window
   // that never opens the AI panel doesn't load them)
 
   // [chat-ui] init
   import("./chat-view.js").then((m) => m.initChatView());
-  import("./restore-ui.js").then((m) => m.initRestoreUI());
+  if (!win.isChat) import("./restore-ui.js").then((m) => m.initRestoreUI()); // [detach] a chat window has no tabs to restore
 
   // [memory] init
   import("./memory-notes.js").then((m) => m.initMemoryNotes());
   import("./storage.js").then((m) => m.initStorage());
+
+  // [detach] init
+  if (!win.isChat) import("./detach.js").then((m) => m.initEditorSide());
 
   // [windows] init
   win.initWindows({
@@ -3080,6 +3112,10 @@ async function boot() {
 
   // [jupyter] init
   for (const n of ["nb_list_cells", "nb_read_cell", "nb_edit_cell", "nb_insert_cell", "nb_run_cell", "nb_kernel_state"]) onRpc(n, async (p) => (await import("./jupyter.js")).rpc(n, p));
+
+  // [vault] init
+  import("./vault.js").then((m) => m.initVault()).catch((e) => console.warn("vault mode", e));
+  window.addEventListener("callio-render-preview", () => onDocChanged(true));
 
   // [wsl] init
   bindEnvSettings(() => settings);
@@ -3128,12 +3164,14 @@ async function boot() {
   wireTabDrag();
   const showSide = (name) => {
     for (const b of $$(".side-tabs button[data-side]")) b.classList.toggle("active", b.dataset.side === name);
-    for (const s of ["files", "outline", "history", "overleaf"]) { const p = $("#side-" + s), was = p.hidden; p.hidden = s !== name; if (was && !p.hidden) enter(p, "fade", { duration: 150 }); }
+    for (const s of ["files", "outline", "history", "overleaf", "vault"]) { const p = $("#side-" + s); if (!p) continue; const was = p.hidden; p.hidden = s !== name; if (was && !p.hidden) enter(p, "fade", { duration: 150 }); }
+    if (name === "vault") window.dispatchEvent(new Event("callio-vault-panel")); // [vault]
     if (name === "history") refreshHistoryPanel();
     if (name === "outline") renderOutline();
     if (name === "overleaf") refreshOverleafPanel();
   };
   for (const b of $$(".side-tabs button[data-side]")) b.onclick = () => showSide(b.dataset.side);
+  window.__showSide = showSide; // [vault] adds its own tab later
 
   // pdf toolbar
   $("#pdf-zoom").onchange = (e) => setZoom(e.target.value);
@@ -3262,6 +3300,7 @@ async function boot() {
   initStructured();
   listen("close-requested", async () => {
     call("close_ack").catch(() => {});
+    if (!(await (await import("./detach.js")).confirmClose())) return; // [detach] the AI window goes with this one
     stashActive();
     const dirty = tabs.filter((t) => t.dirty);
     if (dirty.length) {

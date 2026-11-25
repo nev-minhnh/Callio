@@ -7,6 +7,7 @@ import { NodeSelection, TextSelection, Plugin, PluginKey } from "prosemirror-sta
 import { Decoration, DecorationSet } from "prosemirror-view";
 import { TableView } from "prosemirror-tables";
 import { schema } from "./schema.js";
+import { V as vaultState } from "../vault-state.js"; // [vault]
 
 if (!hljs.getLanguage("latex")) hljs.registerLanguage("latex", latexLang);
 
@@ -633,7 +634,23 @@ class RawBlockView {
       this.head.addEventListener("mousedown", (e) => { e.preventDefault(); this.collapsed = !this.collapsed; this.dom.classList.toggle("collapsed", this.collapsed); this.renderHead(); });
     }
     this.renderHead();
+    if (kind === "frontmatter" && vaultState.on) this.vaultProps(view, getPos); // [vault] typed Properties fields
   }
+  // [vault] the front matter of a note in an Obsidian vault as typed fields (src/vault-props.js)
+  vaultProps(view, getPos) {
+    this.dom.classList.add("vault-fm");
+    this.propsHost = h("div", "vault-props-host");
+    this.propsHost.contentEditable = "false";
+    this.dom.prepend(this.propsHost);
+    this.draw = () => import("../vault-props.js").then((m) => m.buildProps(this.propsHost, {
+      text: this.node.textContent,
+      getText: () => this.node.textContent,
+      apply: (next) => { const pos = getPos(); view.dispatch(view.state.tr.replaceWith(pos + 1, pos + 1 + this.node.content.size, view.state.schema.text(next))); },
+      sourceBtn: () => this.dom.classList.toggle("show-src"),
+    })).catch(() => {});
+    this.draw();
+  }
+  stopEvent(e) { return !!this.propsHost && this.propsHost.contains(e.target); }
   renderHead() {
     const kind = this.node.attrs.kind;
     this.head.replaceChildren();
@@ -654,8 +671,10 @@ class RawBlockView {
   update(node) {
     if (node.type !== this.node.type || node.attrs.kind !== this.node.attrs.kind) return false;
     const headChanged = this.node.attrs.kind === "preamble" || this.node.attrs.kind === "env";
+    const textChanged = this.propsHost && node.textContent !== this.node.textContent;
     this.node = node;
     if (headChanged) this.renderHead();
+    if (textChanged) this.draw();
     return true;
   }
   ignoreMutation(m) { return !this.contentDOM.contains(m.target); }

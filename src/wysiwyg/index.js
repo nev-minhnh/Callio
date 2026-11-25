@@ -28,6 +28,8 @@ import { makeNodeViews, highlightPlugin, numberingPlugin, Popover } from "./view
 import { buildKeymap, buildInputRules, insertCitation } from "./commands.js";
 import { tableUI } from "./tables.js";
 import { buildRibbon, showMenu, closePanel, insertImage } from "./toolbar.js";
+import { vaultPmPlugin } from "../vault-pm.js"; // [vault]
+import { V as vaultState } from "../vault-state.js"; // [vault]
 
 const S = schema.nodes;
 const FORMATS = {
@@ -200,6 +202,7 @@ export function mountVisual(el, opts = {}) {
     ...(kind === "tex" ? [numberingPlugin(ctx)] : []),
     keepPreamble,
     activeBlock,
+    ...(kind === "md" && vaultState.on ? [vaultPmPlugin()] : []), // [vault]
   ];
   const makeState = (doc) => {
     // start in the first paragraph of the body, not in the preamble

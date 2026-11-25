@@ -5,8 +5,8 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { unifiedMergeView } from "@codemirror/merge";
 import { api, listen } from "./api.js";
-import { settings, updateSettings, toast, ask, activeTab, getTabs, getLastCompile, compile, openPath, basename, dirname, folder, saveAll, reloadFromDisk, refreshTree } from "./main.js";
-import { getSelectionInfo } from "./editor.js";
+import { settings, updateSettings, toast, ask, basename, dirname } from "./main.js";
+import { activeTab, getTabs, getLastCompile, compile, openPath, getFolder, reloadFromDisk, refreshTree, getSelectionInfo } from "./host.js"; // [detach] the editor, or (chat window) the editor window's copy
 import { showDiffDialog } from "./history.js";
 import { onRpc, onRpcCancel, initRpc, SELF } from "./rpc.js";
 import { forClaude, fromClaude } from "./envs-core.js"; // [wsl]
@@ -185,7 +185,7 @@ const runHandlers = new Map();
 // ---------------- a chat turn ----------------
 export function projectDir() {
   const t = activeTab();
-  return folder || (t?.path ? dirname(t.path) : null);
+  return getFolder() || (t?.path ? dirname(t.path) : null);
 }
 
 export function contextPreamble(ctx) {

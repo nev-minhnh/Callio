@@ -214,17 +214,24 @@ fn set_limits(max: Option<u32>, idle: Option<u32>) {
 
 // ---------------- events to the window ----------------
 
+/// Every event carries a number that only grows. A window that takes a session over from another
+/// window (the AI chat popped out or attached back) says "I have seen everything up to N", so
+/// events that arrive while the state moves are neither lost nor applied twice.
+static EV_SEQ: AtomicU64 = AtomicU64::new(1);
+
 fn emit(app: &AppHandle, handle: &str, kind: &str, mut extra: Value) {
     if !extra.is_object() {
         extra = json!({});
     }
     extra["handle"] = json!(handle);
     extra["kind"] = json!(kind);
+    extra["seq"] = json!(EV_SEQ.fetch_add(1, Ordering::SeqCst));
     let _ = app.emit("cc-session", extra);
 }
 
 fn emit_raw(app: &AppHandle, handle: &str, mut ev: Value) {
     ev["handle"] = json!(handle);
+    ev["seq"] = json!(EV_SEQ.fetch_add(1, Ordering::SeqCst));
     let _ = app.emit("cc-session", ev);
 }
 
@@ -262,7 +269,7 @@ fn full_state(handle: &str, g: &Inner) -> Value {
         "claudeId": g.claude_id, "cwd": g.req.cwd, "model": g.req.model, "modelSeen": g.model_seen, "label": g.req.label,
         "step": g.step, "todos": g.todos, "queued": queue_json(g), "tokens": g.tokens, "waiting": g.waiting_perms,
         "createdAt": g.created, "updatedAt": g.updated, "turnStartedAt": g.turn_started_ms, "endedAt": g.ended,
-        "summary": g.summary, "lastError": g.last_error, "cleanEnd": clean_end(g), "meta": g.meta,
+        "summary": g.summary, "lastError": g.last_error, "cleanEnd": clean_end(g), "meta": g.meta, "window": g.req.window,
         "settings": {"permissionMode": g.req.permission_mode, "effort": g.req.effort, "thinking": g.req.thinking, "web": g.req.web},
     })
 }
@@ -1231,6 +1238,26 @@ pub fn cc_session_meta(handle: String, meta: Value) -> CmdResult<()> {
         }
     }
     touch(&mut g);
+    Ok(())
+}
+
+/// The AI chat moved to another window (popped out, or attached back): from now on this session's
+/// permission questions go to `label`, and the ones still waiting are asked there again. The new
+/// window shows each question once (it knows the rpc ids it already has).
+#[tauri::command]
+pub fn cc_session_set_window(app: AppHandle, handle: String, label: String) -> CmdResult<()> {
+    let s = get(&handle).ok_or("This session isn't open any more")?;
+    {
+        let mut g = s.inner.lock().unwrap();
+        g.req.window = Some(label.clone());
+        if let Some(m) = g.meta.as_object_mut() {
+            m.insert("win".into(), json!(label));
+        } else {
+            g.meta = json!({ "win": label });
+        }
+        touch(&mut g);
+    }
+    super::mcp::reemit_pending(&app, &handle, &label);
     Ok(())
 }
 

@@ -9,6 +9,7 @@ import { settings, updateSettings, toast, ask, activeTab, getTabs, getLastCompil
 import { getSelectionInfo } from "./editor.js";
 import { showDiffDialog } from "./history.js";
 import { onRpc, onRpcCancel, initRpc, SELF } from "./rpc.js";
+import { forClaude, fromClaude } from "./envs-core.js"; // [wsl]
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
@@ -38,7 +39,7 @@ let sessionHooks = null;
 export function setSessionHooks(h) { sessionHooks = h; }
 onRpc("permission", (params, rpc) => { if (params.session && sessionHooks) { sessionHooks.permission(params, rpc); return SELF; } permissionCard(rpc, params); return SELF; });
 onRpc("editor_state", () => editorState());
-onRpc("open_file", async (params) => { await openPath(params.path, params.line || undefined); return `Opened ${params.path}`; });
+onRpc("open_file", async (params) => { await openPath(fromClaude(params.path, folder), params.line || undefined); return `Opened ${params.path}`; });
 onRpc("compile", () => compileForClaude());
 onRpcCancel((rpc) => { sessionHooks?.answered?.(rpc, null); const c = cards.get(rpc); if (c) { c.classList.add("answered"); c.querySelector(".cc-perm-actions").innerHTML = "<small>No answer — declined</small>"; cards.delete(rpc); } });
 
@@ -49,11 +50,11 @@ function editorState() {
   const line = sel ? sel.doc.lineAt(sel.from).number : null;
   const errs = (getLastCompile()?.diagnostics || []).filter((d) => d.severity === "error").slice(0, 20);
   return {
-    file: t?.path || null, line, kind: t?.kind || null,
+    file: forClaude(t?.path || null, folder), line, kind: t?.kind || null,
     selection: sel && sel.to > sel.from ? sel.text.slice(0, 20000) : "",
-    unsavedFiles: getTabs().filter((x) => x.dirty).map((x) => x.path || x.name),
-    openFiles: getTabs().map((x) => x.path).filter(Boolean),
-    compileErrors: errs.map((d) => ({ file: d.file, line: d.line, message: d.message })),
+    unsavedFiles: getTabs().filter((x) => x.dirty).map((x) => forClaude(x.path, folder) || x.name),
+    openFiles: getTabs().map((x) => forClaude(x.path, folder)).filter(Boolean),
+    compileErrors: errs.map((d) => ({ file: forClaude(d.file, folder), line: d.line, message: d.message })),
     ...(office ? { note: { doc: "A Word document: read it with office_read and change it with word_edit (never write the file directly).", sheet: "A spreadsheet: read it with office_read and change it with sheet_edit (never write the file directly).", pdf: "A PDF: read it with read_pdf / office_read and change it with pdf_tool.", deck: "A presentation: read it with office_read and change it with deck_edit (never write the file directly).", image: "A picture: read its edits with office_read and change it with image_edit (picture commands such as develop.set {values: {\"light.exposure\": 0.5}}, develop.auto, crop.aspect, mask.add…; never write the file directly)." }[t.kind] } : {}),
   };
 }
@@ -72,9 +73,9 @@ async function compileForClaude() {
   const r = getLastCompile();
   if (!r || r === prev) return "Couldn't compile: open the project's main .tex file in Callio first.";
   const d = r.diagnostics || [];
-  const fmt = (x) => `${x.file ? x.file : ""}:${x.line || "?"}: ${x.message}`;
+  const fmt = (x) => `${x.file ? forClaude(x.file, folder) : ""}:${x.line || "?"}: ${x.message}`;
   return {
-    ok: !!r.ok, engine: r.engine, pdf: r.pdf,
+    ok: !!r.ok, engine: r.engine, pdf: forClaude(r.pdf, folder),
     errors: d.filter((x) => x.severity === "error").slice(0, 40).map(fmt),
     warnings: d.filter((x) => x.severity === "warning").slice(0, 40).map(fmt),
     warningCount: d.filter((x) => x.severity === "warning").length,
@@ -211,6 +212,7 @@ export const SYSTEM = `You are working inside Callio, the LaTeX/Markdown editor 
 - Preserve LaTeX commands, labels, citations and math unless asked to change them. Keep answers concise.`;
 
 export function errorHtml(msg = "") {
+  msg = String(msg || "").replace(/^CLAUDE_MISSING_WSL:(.+)$/, (m, d) => `Claude Code isn't installed in WSL (${d}) — install it in AI settings → Claude Code → Run Claude Code in.`); // [wsl]
   const auth = /log ?in|sign ?in|auth|credential|401|api key|oauth|subscription/i.test(msg);
   const limit = /limit|quota|429|usage/i.test(msg);
   return `<div class="ai-error">${esc(msg || "Claude Code stopped with an error.")}${auth ? `<div><button class="small cc-signin">Sign in to Claude Code</button></div>` : ""}${limit ? `<div class="note">Claude Code shares your plan's usage limits with claude.ai.</div>` : ""}</div>`;
@@ -319,6 +321,7 @@ export async function renderCCSettings(changed) {
     if (e.target.checked) import("./cc-sessions.js").then((m) => m.initSessions());
   };
   import("./cc-sessions.js").then((m) => m.renderSessionSettings(box));
+  import("./envs.js").then((m) => m.renderCCEnv(box)); // [wsl] where Claude Code runs
   box.querySelector("#cc-mode").value = settings.ccPermissionMode || "default";
   box.querySelector("#cc-mode").onchange = async (e) => {
     if (!(await confirmMode(e.target.value))) { e.target.value = settings.ccPermissionMode || "default"; return; }

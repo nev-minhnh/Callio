@@ -1,0 +1,49 @@
+/* Environments (WSL / Docker): settings page, "Open WSL folder" dialog, status chip, kernel picker groups */
+#st-env { font-weight: 500; color: var(--accent); }
+#sel-tools-in { max-width: 84px; }
+
+.env-actions { display: flex; gap: 8px; margin: 4px 0 8px; }
+.env-actions button { display: inline-flex; align-items: center; gap: 5px; }
+.env-cards { display: flex; flex-direction: column; gap: 8px; }
+.env-card { border: 1px solid var(--border); border-radius: var(--radius, 8px); background: var(--bg-2); padding: 9px 11px; }
+.env-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.env-name { font-size: 13.5px; }
+.env-tag { font-size: 11px; color: var(--fg-3); border: 1px solid var(--border); border-radius: 999px; padding: 0 7px; line-height: 17px; }
+.env-state { font-size: 12px; color: var(--fg-2); }
+.env-sub { margin: 3px 0 0 18px; font-size: 12px; color: var(--fg-3); overflow-wrap: anywhere; }
+.env-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--fg-3); }
+.env-dot.on { background: var(--ok, #3b9d5b); }
+.env-dot.off { background: transparent; border: 1.5px solid var(--fg-3); }
+.env-tools { margin: 8px 0 0 18px; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 3px 14px; }
+.env-tool { display: flex; align-items: baseline; gap: 6px; font-size: 12.5px; min-width: 0; }
+.env-tool small { color: var(--fg-3); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.env-tool.ok .env-tick { color: var(--ok, #3b9d5b); }
+.env-tool.no .env-tick { color: var(--fg-3); }
+.env-tick .ic { width: 13px; height: 13px; vertical-align: -2px; }
+.env-note { display: block; margin-top: 4px; grid-column: 1 / -1; }
+.env-msgs .note { margin: 6px 0 0; }
+.env-cc { margin-top: 6px; }
+.env-ccst small { flex-basis: 100%; }
+
+/* folder dialog */
+.env-dlg { width: min(560px, calc(100vw - 24px)); }
+.env-dlg form { display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; }
+.env-dlg h3 { margin: 0; font-size: 15px; }
+.env-dlg h4 { margin: 8px 0 4px; font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--fg-3); font-weight: 600; }
+.env-body { min-height: 240px; max-height: 60vh; display: flex; flex-direction: column; gap: 6px; overflow: auto; }
+.env-pick, .env-list { display: flex; flex-direction: column; gap: 2px; }
+.env-list { flex: 1; min-height: 160px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 3px; background: var(--bg-2); }
+.env-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 6px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--fg); font: inherit; font-size: 13px; cursor: pointer; }
+.env-row:hover, .env-row:focus-visible { background: var(--bg-hover); }
+.env-row.cur { background: var(--accent-soft); }
+.env-row .ic { width: 15px; height: 15px; color: var(--fg-3); flex: none; }
+.env-row .env-n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.env-row small { color: var(--fg-3); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55%; }
+.env-bar { display: flex; gap: 6px; align-items: center; }
+.env-bar .small .ic { width: 14px; height: 14px; }
+.env-path { flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-2); color: var(--fg); font: 12.5px var(--mono, Consolas, monospace); }
+.env-hint { margin: 2px 0 0; }
+.env-btns { display: flex; gap: 8px; align-items: center; }
+.env-btns .tb-spacer { flex: 1; }
+.env-btns[hidden], .env-btns button[hidden] { display: none; }
+.jp-eg { display: contents; }

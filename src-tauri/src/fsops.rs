@@ -167,6 +167,23 @@ pub async fn write_text(path: String, text: String, encoding: Option<String>, ex
         f.write_all(&bytes).map_err(|e| format!("{path}: {e}"))?;
         f.sync_all().map_err(|e| format!("{path}: {e}"))?;
     }
+    // [wsl] Over the 9P share of a WSL distro a rename would give the file a new owner and mode
+    // (a script would lose its executable bit): overwrite the existing file in place instead; the
+    // complete temp copy written above stays until the overwrite has finished.
+    if crate::envs::is_wsl_path(&path) && p.is_file() {
+        let r = std::fs::OpenOptions::new().write(true).truncate(true).open(&p).and_then(|mut f| {
+            use std::io::Write;
+            f.write_all(&bytes)?;
+            f.sync_all()
+        });
+        return match r {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&tmp);
+                Ok(mtime(&p))
+            }
+            Err(e) => Err(format!("{path}: {e} (the complete new text is kept next to it as {})", tmp.file_name().and_then(|n| n.to_str()).unwrap_or("a .callio-tmp file"))),
+        };
+    }
     if let Err(e) = std::fs::rename(&tmp, &p) {
         let _ = std::fs::remove_file(&tmp);
         return Err(format!("{path}: {e} (is the file open in another program?)"));

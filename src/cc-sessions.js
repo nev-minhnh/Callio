@@ -15,6 +15,7 @@
 import { call, listen } from "./api.js";
 import { settings, updateSettings, toast, ask, saveAll, reloadFromDisk, refreshTree, basename } from "./main.js";
 import { chatState, swapChat, freshChatState, resetChat, registerSessions, addMsg, loadSession, refreshAIContext, renderSessBar } from "./ai.js";
+import { ccRunIn, fromClaude } from "./envs-core.js"; // [wsl]
 import { toolTitle, EDIT_TOOLS, renderChanges, errorHtml, permissionCard, cards, setSessionHooks, SYSTEM, contextPreamble, projectDir } from "./claude-code.js";
 import { createStreamer } from "./stream.js";
 import { initRpc } from "./rpc.js";
@@ -281,7 +282,7 @@ export async function sendMessage(text, prompt, ui) {
     maxParallel: +settings.ccMaxParallel || 4, idleMinutes: +settings.ccIdleMinutes || 30,
   };
   if (!rt.handle) {
-    const r = await call("cc_session_start", { req: { cwd, model, permissionMode: patch.permissionMode, systemAppend: patch.systemAppend, label, effort: patch.effort || null, thinking: patch.thinking, web: patch.web || null, resumeId: chat.cc.id || null, window: WIN, maxParallel: patch.maxParallel, idleMinutes: patch.idleMinutes, meta: { chatSid: chat.sid, project: chat.project ?? "", title: chat.title || label } } });
+    const r = await call("cc_session_start", { req: { cwd, model, permissionMode: patch.permissionMode, systemAppend: patch.systemAppend, label, effort: patch.effort || null, thinking: patch.thinking, web: patch.web || null, resumeId: chat.cc.id || null, window: WIN, maxParallel: patch.maxParallel, idleMinutes: patch.idleMinutes, runIn: ccRunIn(cwd), meta: { chatSid: chat.sid, project: chat.project ?? "", title: chat.title || label } } });
     rt.handle = r.handle; rt.cwd = cwd; rt.model = model;
     byHandle.set(rt.handle, rt);
   }
@@ -541,9 +542,9 @@ function onEv(rt, ev) {
       chip.title = JSON.stringify(tl.input, null, 1).slice(0, 1500);
       seg.toolsEl.appendChild(chip);
       seg.toolEls.set(tl.id, chip);
-      const f = tl.input?.file_path || tl.input?.notebook_path;
+      const f = fromClaude(tl.input?.file_path || tl.input?.notebook_path, rt.cwd); // [wsl] Linux path → the window's
       if (f && EDIT_TOOLS.includes(tl.name)) seg.toolFiles.set(tl.id, f);
-      const seen = f || tl.input?.path;
+      const seen = f || fromClaude(tl.input?.path, rt.cwd);
       if (seen && (EDIT_TOOLS.includes(tl.name) || ["Read", "mcp__callio__read_pdf", "mcp__callio__view_pdf_page", "mcp__callio__open_file"].includes(tl.name))) { seg.ui.fileTag?.(seen, EDIT_TOOLS.includes(tl.name) ? "edit" : "read", true); seg.liveTags.set(tl.id, seen); }
       if (tl.name === "Task" || tl.name === "Agent") ensureAgentFromTool(rt, tl);
     }
@@ -818,7 +819,7 @@ async function restoreTab(j) {
   const rt = (tab.rt = makeRuntime(tab));
   rt.cwd = j.cwd; rt.model = j.model || null; rt.lastError = "";
   const s = j.settings || {};
-  const r = await call("cc_session_start", { req: { handle: j.handle, cwd: j.cwd, model: j.model || null, permissionMode: s.permissionMode || settings.ccPermissionMode || "default", systemAppend: SYSTEM, label: j.label || "", effort: s.effort || null, thinking: s.thinking !== false, web: s.web || null, resumeId: j.claudeId || null, restored: true, window: WIN, meta, maxParallel: +settings.ccMaxParallel || 4, idleMinutes: +settings.ccIdleMinutes || 30 } });
+  const r = await call("cc_session_start", { req: { handle: j.handle, cwd: j.cwd, model: j.model || null, permissionMode: s.permissionMode || settings.ccPermissionMode || "default", systemAppend: SYSTEM, label: j.label || "", effort: s.effort || null, thinking: s.thinking !== false, web: s.web || null, resumeId: j.claudeId || null, restored: true, window: WIN, meta, maxParallel: +settings.ccMaxParallel || 4, idleMinutes: +settings.ccIdleMinutes || 30, runIn: ccRunIn(j.cwd) } });
   rt.handle = r.handle;
   byHandle.set(rt.handle, rt);
   rt.status = "error"; rt.ranOnce = true; rt.act.endedAt = Date.now();

@@ -263,6 +263,11 @@ pub(crate) fn text_result(v: Value, is_error: bool) -> Value {
 async fn call_tool(app: &Asker, params: &Value, session: Option<&str>) -> Value {
     let name = params["name"].as_str().unwrap_or("");
     let args = params.get("arguments").cloned().unwrap_or(json!({}));
+    // [wsl] a Claude Code running in WSL names files by Linux path: translate them to Windows paths
+    let args = match session.and_then(crate::claude_code::session::wsl_distro_of) {
+        Some(d) => crate::envs::claude::map_tool_args(&d, args),
+        None => args,
+    };
     match name {
         "approve" => {
             let tool = args["tool_name"].as_str().unwrap_or("").to_string();

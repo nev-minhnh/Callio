@@ -47,6 +47,7 @@
           <div id="menu-open" class="menu" role="menu" hidden>
             <button role="menuitem" data-act="open-file"><span class="fi"><svg class="ic" aria-hidden="true"><use href="#ic-file"/></svg></span><span>Open file…</span><kbd>Ctrl+O</kbd></button>
             <button role="menuitem" data-act="open-folder"><span class="fi"><svg class="ic" aria-hidden="true"><use href="#ic-folder"/></svg></span><span>Open folder…</span><kbd>Ctrl+Shift+O</kbd></button>
+            <button role="menuitem" data-act="open-wsl-folder"><span class="fi"><svg class="ic" aria-hidden="true"><use href="#ic-folder"/></svg></span><span>Open WSL folder…</span><kbd></kbd></button>
             <button role="menuitem" data-act="restore-drafts"><span class="fi"><svg class="ic" aria-hidden="true"><use href="#ic-refresh"/></svg></span><span>Restore drafts…</span><kbd></kbd></button>
           </div>
         </div>
@@ -126,6 +127,7 @@
           <div class="welcome-actions">
             <button id="w-open" class="primary">Open file…</button>
             <button id="w-folder">Open folder…</button>
+            <button id="w-wsl">Open WSL folder…</button>
             <button id="w-overleaf">Open from Overleaf…</button>
           </div>
           <div id="recent"></div>
@@ -340,6 +342,7 @@
       <span id="st-msg"></span>
       <span id="st-words"></span>
       <span id="st-pos"></span>
+      <button id="st-env" class="st-btn" hidden title="Where this folder lives — click for Environments"></button>
       <button id="st-check" class="st-btn" hidden></button>
       <button id="st-indent" class="st-btn" hidden title="Indentation — click to change or convert"></button>
       <button id="st-enc" class="st-btn" hidden></button>
@@ -365,6 +368,7 @@
           <!-- [jupyter] nav -->
           <button type="button" data-sec="jupyter"><svg class="ic" aria-hidden="true"><use href="#ic-notebook"/></svg><span>Jupyter</span></button>
           <!-- [wsl] nav -->
+          <button type="button" data-sec="environments"><svg class="ic" aria-hidden="true"><use href="#ic-tools"/></svg><span>Environments</span></button>
           <!-- [ssh] nav -->
           <button type="button" data-sec="files"><svg class="ic" aria-hidden="true"><use href="#ic-file-types"/></svg><span>File types</span></button>
           <button type="button" data-sec="about"><svg class="ic" aria-hidden="true"><use href="#ic-info"/></svg><span>About</span></button>
@@ -464,6 +468,7 @@
           </section>
 
           <!-- [wsl] sections -->
+          <section data-sec="environments" hidden><div id="env-settings"></div></section>
 
           <!-- [ssh] sections -->
 

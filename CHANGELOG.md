@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.19.0
+
+- Work inside WSL2: File → Open WSL folder… (and a welcome-page button) browses your distros, starts a stopped one, and opens a folder of the distro as the project. A status chip shows the distro. Files keep their line endings and, on save, their Linux permissions (the executable bit); the tree stays fresh by polling every 2 s because \\wsl.localhost does not deliver change events.
+- LaTeX for a WSL folder can be compiled with latexmk/tectonic inside the distro (toolbar choice "Windows / WSL", remembered per folder).
+- Jupyter: kernel picker has "WSL · distro" and "Docker · container" groups. Callio finds Pythons in the distro or container, can install jupyter_server + ipykernel, or create a .venv. Docker containers need a published port (-p 8888:8888).
+- Claude Code can run inside WSL (Settings → AI → Claude Code → Run in, or per folder): paths are translated both ways, Callio's MCP tools stay reachable (127.0.0.1 in mirrored networking; in NAT mode a small token-protected forwarder on the WSL gateway address), one-click install of Claude Code in the distro, and a sign-in button.
+- Settings → Environments (Môi trường): WSL distros and Docker containers with state, Start/Stop, tool check (python, jupyter, latexmk, claude), and open-folder shortcuts.
+
 ## 0.18.0
 
 This release brings together what was planned as 0.16 (chat), 0.16.1 (memory and data settings), 0.17 (windows) and 0.18 (Jupyter).

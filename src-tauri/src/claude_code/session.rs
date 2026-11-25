@@ -50,6 +50,8 @@ pub struct StartReq {
     meta: Value,
     max_parallel: Option<u32>,
     idle_minutes: Option<u32>,
+    /// [wsl] where the process runs: "windows" (default) or "wsl:<distro>"
+    run_in: Option<String>,
 }
 
 /// What may change between two messages of one session.
@@ -345,7 +347,9 @@ fn send_control(g: &mut Inner, id: &str, request: Value) -> Result<(), String> {
 }
 
 fn spawn_proc(app: &AppHandle, sess: &Arc<Sess>, g: &mut Inner) -> Result<(), String> {
-    let exe = find_claude().ok_or("CLAUDE_MISSING")?;
+    // ---- how the process is spawned: local | wsl (the seam other ways, e.g. ssh, plug into) ----
+    let wsl = crate::envs::claude::target(&g.req.run_in, &g.req.cwd)?;
+    let exe = if wsl.is_some() { PathBuf::new() } else { find_claude().ok_or("CLAUDE_MISSING")? };
     let cwd = PathBuf::from(&g.req.cwd);
     if !cwd.is_dir() {
         return Err("Open a project folder (or a saved file) first".into());
@@ -354,7 +358,10 @@ fn spawn_proc(app: &AppHandle, sess: &Arc<Sess>, g: &mut Inner) -> Result<(), St
     let base_cfg = tauri::async_runtime::block_on(ensure_server(app, &st)).es()?;
     // this session's own MCP address: the handle in the path tells permission questions apart
     let mut body: Value = serde_json::from_slice(&std::fs::read(&base_cfg).es()?).es()?;
-    let url = body["mcpServers"]["callio"]["url"].as_str().unwrap_or("").trim_end_matches('/').to_string();
+    let mut url = body["mcpServers"]["callio"]["url"].as_str().unwrap_or("").trim_end_matches('/').to_string();
+    if let Some(w) = &wsl {
+        url = w.mcp_url(&url)?; // an address the distro can reach
+    }
     body["mcpServers"]["callio"]["url"] = json!(format!("{url}/{}", sess.handle));
     let dir = crate::settings::category_dir(app, "claude-code");
     std::fs::create_dir_all(&dir).es()?;
@@ -368,8 +375,14 @@ fn spawn_proc(app: &AppHandle, sess: &Arc<Sess>, g: &mut Inner) -> Result<(), St
     let resume = g.claude_id.clone().or_else(|| g.req.resume_id.clone()).filter(|s| !s.is_empty());
     let mode = g.req.permission_mode.clone();
     let extra = Extra { effort: g.req.effort.as_deref(), thinking: g.req.thinking, web: g.req.web.as_deref() };
-    let mut c = claude_cmd(&exe);
-    c.current_dir(&cwd).args(run_args(&cfg, &sys, &mode, g.req.model.as_deref(), resume.as_deref(), &extra));
+    let mut c = match &wsl {
+        Some(w) => w.command(run_args(&w.path(&cfg), &w.path(&sys), &mode, g.req.model.as_deref(), resume.as_deref(), &extra)),
+        None => {
+            let mut c = claude_cmd(&exe);
+            c.current_dir(&cwd).args(run_args(&cfg, &sys, &mode, g.req.model.as_deref(), resume.as_deref(), &extra));
+            c
+        }
+    };
     c.args(["--input-format", "stream-json"]);
     // makes Claude Code say when a turn is really over (idle), running, or waiting for an answer
     c.env("CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS", "1");
@@ -1211,6 +1224,13 @@ pub fn on_app_exit(app: &AppHandle) {
 }
 
 /// The window a session belongs to (its permission questions go there).
+/// [wsl] The distro this session's Claude Code runs in (its file paths are Linux paths); None on Windows.
+pub(crate) fn wsl_distro_of(handle: &str) -> Option<String> {
+    let s = mgr().map.lock().ok()?.get(handle).cloned()?;
+    let g = s.inner.lock().ok()?;
+    crate::envs::claude::distro_for(&g.req.run_in, &g.req.cwd)
+}
+
 pub(crate) fn window_of(handle: &str) -> Option<String> {
     let s = mgr().map.lock().ok()?.get(handle).cloned()?;
     let w = s.inner.lock().ok()?.req.window.clone();

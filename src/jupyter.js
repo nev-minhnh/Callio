@@ -323,6 +323,12 @@ async function startWith(host, choice) {
       const info = await J("jp_local_start", { python: choice.python, dir });
       conn = { id: info.id, kind: "local", baseUrl: info.baseUrl };
       kernelPath = info.kernelPath;
+    } else if (choice.kind === "wsl" || choice.kind === "docker") {
+      // [wsl] a server started inside a WSL distro or a Docker container
+      s.starting = { connId: null };
+      const info = await J("envs_jp_start", { env: choice.env, python: choice.python, dir: host.dir || "" });
+      conn = { id: info.id, kind: info.kind, baseUrl: info.baseUrl };
+      kernelPath = info.kernelPath;
     } else {
       const sv = servers().find((x) => x.id === choice.serverId);
       if (!sv) throw new Error("This server was removed. Pick another kernel.");
@@ -409,8 +415,10 @@ async function shutdownKernel(s, { quiet } = {}) {
 /** Works out which kernel to use when the notebook has none yet (remembered, default, or ask). */
 async function chooseDefault(host) {
   const saved = jmap()[host.key]?.choice;
-  if (saved && (saved.kind === "local" || servers().some((x) => x.id === saved.serverId))) return saved;
+  if (saved && (saved.kind === "local" || saved.kind === "wsl" || saved.kind === "docker" || servers().some((x) => x.id === saved.serverId))) return saved;
   const dir = host.dir || "";
+  // [wsl] a notebook that lives in a WSL distro runs in that distro when it has a usable Python
+  if (/^[\\/]{2}wsl(\.localhost|\$)[\\/]/i.test(dir)) { const pick = await import("./envs-jupyter.js").then((m) => m.defaultEnvChoice(host, settings)).catch(() => null); if (pick) return pick; }
   const list = await interpreters(dir);
   const usable = list.filter((i) => i.hasServer && i.hasKernel);
   const want = settings.jupyterDefaultPython;
@@ -699,11 +707,13 @@ async function paintPicker(host, p, finish, force) {
       }
     } catch {}
   }
+  h += `<div class="jp-envs"></div>`; // [wsl] groups "WSL · distro" and "Docker · container" are filled in below
   h += `<h4>Jupyter servers</h4>`;
   h += servers().map((sv) => `<div class="jp-srv" data-id="${esc(sv.id)}"><button class="jp-row" data-act="server" data-id="${esc(sv.id)}" title="${esc(sv.baseUrl)}">${ic("globe")}<span class="jp-rn">${esc(sv.name)}</span><small>${esc(sv.baseUrl)}</small></button><button class="icon small" data-act="edit" data-id="${esc(sv.id)}" title="Edit">${ic("pen")}</button><button class="icon small" data-act="remove" data-id="${esc(sv.id)}" title="Remove">${ic("x")}</button><div class="jp-specs" hidden></div></div>`).join("");
   h += `<button class="jp-row add" data-act="connect">${ic("plus")}<span class="jp-rn">Connect to a Jupyter server…</span></button>`;
   if (alive(s)) h += `<h4>Running kernels</h4><div class="jp-kernels"><div class="jp-note">…</div></div>`;
   p.innerHTML = h;
+  import("./envs-jupyter.js").then((m) => m.mountEnvGroups(host, p, finish, s.choice)); // [wsl]
   if (alive(s)) fillKernels(host, p, finish);
   p.onclick = async (e) => {
     const b = e.target.closest("[data-act]");

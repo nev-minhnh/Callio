@@ -62,7 +62,7 @@ fn free_port() -> CmdResult<u16> {
 }
 
 #[cfg(windows)]
-mod job {
+pub(crate) mod job {
     //! A Windows Job object with KILL_ON_JOB_CLOSE: every server (and so every kernel) dies
     //! with Callio, even if Callio crashes or is ended from the Task Manager.
     use std::sync::OnceLock;
@@ -94,7 +94,7 @@ mod job {
     }
 }
 #[cfg(not(windows))]
-mod job {
+pub(crate) mod job {
     pub fn assign(_: &std::process::Child) {}
 }
 

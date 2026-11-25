@@ -7,10 +7,10 @@
 //! side only carries the JSON frames (events `jp-msg`, `jp-ws`) and does REST calls, so the
 //! token never leaves Rust.
 pub mod mcp;
-mod net;
+pub(crate) mod net;
 pub mod parse;
 mod pyenv;
-mod server;
+pub(crate) mod server;
 
 use crate::util::{CmdResult, ErrStr};
 use serde::Deserialize;
@@ -46,6 +46,8 @@ impl ConnSpec {
                 let token = crate::settings::get_secret_value(&secret_key(&self.id)).unwrap_or_default();
                 Ok(net::Endpoint { base, token, pin: self.fingerprint.clone().filter(|f| !f.is_empty()), id: self.id.clone() })
             }
+            // [wsl] a server started inside a WSL distro or a Docker container (envs/jupyter.rs)
+            "wsl" | "docker" => crate::envs::jupyter::endpoint(&self.id).ok_or_else(|| "The Jupyter server in that environment is not running. Pick the kernel again.".to_string()),
             k => Err(format!("Unknown connection kind: {k}")),
         }
     }
@@ -103,6 +105,7 @@ pub fn jp_set_idle(minutes: u64) {
 #[tauri::command]
 pub fn jp_shutdown() {
     server::stop_all();
+    crate::envs::jupyter::stop_all(); // [wsl]
 }
 
 // ---------------- remote servers ----------------

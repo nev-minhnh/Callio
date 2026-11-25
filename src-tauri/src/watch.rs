@@ -35,7 +35,13 @@ pub fn fs_watch(app: AppHandle, window: tauri::WebviewWindow, path: Option<Strin
     let label = window.label().to_string();
     let mut slot = WATCH.lock().unwrap_or_else(|e| e.into_inner());
     slot.remove(&label); // drop this window's previous watcher first
+    crate::envs::poll::stop(&label); // [wsl]
     let Some(path) = path.filter(|p| !p.trim().is_empty()) else { return Ok(()) };
+    // [wsl] the 9P share of a WSL distro sends no file events: poll it instead
+    if crate::envs::is_wsl_path(&path) {
+        crate::envs::poll::start(app, label, path);
+        return Ok(());
+    }
     let root = PathBuf::from(&path);
     let (tx, rx) = mpsc::channel::<notify::Result<notify::Event>>();
     let mut w = notify::recommended_watcher(tx).map_err(|e| e.to_string())?;
@@ -77,5 +83,6 @@ pub fn fs_watch(app: AppHandle, window: tauri::WebviewWindow, path: Option<Strin
 
 /// A window closed: stop its watcher.
 pub fn drop_for(label: &str) {
+    crate::envs::poll::stop(label); // [wsl]
     WATCH.lock().unwrap_or_else(|e| e.into_inner()).remove(label);
 }

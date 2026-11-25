@@ -850,7 +850,7 @@ async function sendCC(text, slash) {
     await sx.sendMessage(text, prompt, ui);
   } catch (e) {
     chat.ccReady = false;
-    const msg = e.message === "CLAUDE_MISSING" ? "Claude Code isn't installed — see AI settings → Claude Code." : e.message;
+    const msg = e.message === "CLAUDE_MISSING" ? "Claude Code isn't installed — see AI settings → Claude Code." : /^CLAUDE_MISSING_WSL:/.test(e.message) ? `Claude Code isn't installed in WSL (${e.message.split(":")[1]}) — install it in AI settings → Claude Code → Run Claude Code in.` : e.message;
     addMsg("assistant", `<div class="ai-error">${esc(msg)}</div>`);
   } finally {
     fileTagsDone();

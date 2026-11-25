@@ -39,6 +39,7 @@ mod windows;
 mod jupyter;
 
 // [wsl] mods
+mod envs;
 
 // [ssh] mods
 
@@ -417,6 +418,22 @@ fn main() {
             jupyter::jp_ws_close,
 
             // [wsl] commands
+            envs::detect::envs_list,
+            envs::detect::envs_wsl_info,
+            envs::detect::envs_wsl_start,
+            envs::detect::envs_wsl_stop,
+            envs::detect::envs_probe,
+            envs::detect::envs_docker_info,
+            envs::claude::envs_install_claude,
+            envs::claude::envs_cc_status,
+            envs::claude::envs_cc_login,
+            envs::poll::envs_poll_set,
+            envs::jupyter::envs_jp_interpreters,
+            envs::jupyter::envs_jp_start,
+            envs::jupyter::envs_jp_stop,
+            envs::jupyter::envs_jp_list,
+            envs::jupyter::envs_jp_install,
+            envs::jupyter::envs_jp_venv,
 
             // [ssh] commands
         ])

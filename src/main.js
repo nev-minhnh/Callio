@@ -3,6 +3,7 @@ import "./styles.css";
 import "./icons.js";
 import { api, listen, IS_TAURI, call, fileSrc } from "./api.js";
 import { initRpc, onRpc } from "./rpc.js";
+import { bindEnvSettings } from "./envs-core.js"; // [wsl] where Claude Code / LaTeX tools run for a folder
 // [windows] one window per folder
 import * as win from "./windows.js";
 import {
@@ -927,6 +928,9 @@ function renderRecent() {
 // ---------------- file tree ----------------
 export let folder = null;
 const expanded = new Set();
+/** [wsl] the folders the tree shows (a WSL folder is polled for changes, only those) and the open files. */
+export const expandedDirs = () => [...expanded];
+export const openFilePaths = () => tabs.filter((t) => t.path).map((t) => t.path);
 export function setFolder(f) {
   folder = f;
   expanded.clear();
@@ -2533,6 +2537,7 @@ const toggleNewMenu = (focus) => toggleMenu($("#btn-new"), focus);
 const MENU_ACTIONS = {
   "open-file": () => cmdOpen(),
   "open-folder": () => cmdFolder(),
+  "open-wsl-folder": () => import("./envs.js").then((e) => e.openWslFolder()), // [wsl]
   "restore-drafts": () => import("./restore-ui.js").then((m) => m.openDraftsList()),
   save: () => cmdSave(false),
   "save-as": () => cmdSave(true),
@@ -3077,6 +3082,8 @@ async function boot() {
   for (const n of ["nb_list_cells", "nb_read_cell", "nb_edit_cell", "nb_insert_cell", "nb_run_cell", "nb_kernel_state"]) onRpc(n, async (p) => (await import("./jupyter.js")).rpc(n, p));
 
   // [wsl] init
+  bindEnvSettings(() => settings);
+  import("./envs.js").then((e) => e.initEnvs());
 
   // [ssh] init
 

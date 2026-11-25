@@ -121,6 +121,7 @@ pub async fn scan_project(root: String) -> CmdResult<ProjectIndex> {
     let bib_re = Regex::new(r"@[a-zA-Z]+\s*\{\s*([^,\s]+)\s*,").unwrap();
     let bibitem_re = Regex::new(r"\\bibitem(?:\[[^\]]*\])?\{([^}]+)\}").unwrap();
     let (mut labels, mut cites, mut files) = (BTreeSet::new(), BTreeSet::new(), Vec::new());
+    let wsl_root = crate::envs::is_wsl_path(&root.to_string_lossy());
     let mut stack = vec![(root.clone(), 0)];
     let mut count = 0;
     while let Some((dir, depth)) = stack.pop() {
@@ -131,7 +132,16 @@ pub async fn scan_project(root: String) -> CmdResult<ProjectIndex> {
             if name.starts_with('.') || name == "node_modules" {
                 continue;
             }
-            if p.is_dir() {
+            // [wsl] a project in a distro is read over the 9P share, where every stat is slow: skip the
+            // folders that hold no LaTeX, and ask the directory entry instead of stat-ing each file
+            if wsl_root && ["venv", "__pycache__", "target", "site-packages"].contains(&name.as_str()) {
+                continue;
+            }
+            let is_dir = match e.file_type() {
+                Ok(t) if !t.is_symlink() => t.is_dir(),
+                _ => p.is_dir(),
+            };
+            if is_dir {
                 if depth < 6 {
                     stack.push((p, depth + 1));
                 }
@@ -175,7 +185,7 @@ pub fn build_dir(app: &AppHandle, root: &Path) -> PathBuf {
 }
 
 /// pdflatex & co can't create subfolders of -output-directory for \include{dir/file}.
-fn mirror_dirs(src: &Path, dst: &Path, depth: usize) {
+pub(crate) fn mirror_dirs(src: &Path, dst: &Path, depth: usize) {
     if depth > 5 {
         return;
     }
@@ -195,12 +205,17 @@ fn mirror_dirs(src: &Path, dst: &Path, depth: usize) {
 const TIMEOUT: Duration = Duration::from_secs(600);
 
 #[tauri::command]
-pub async fn compile(app: AppHandle, state: State<'_, SettingsState>, root: String, engine: Option<String>) -> CmdResult<CompileResult> {
+pub async fn compile(app: AppHandle, state: State<'_, SettingsState>, root: String, engine: Option<String>, tools_in: Option<String>) -> CmdResult<CompileResult> {
     let mut b = backend(&state);
     if let Some(e) = engine.filter(|e| !e.is_empty()) {
         b.engine = e;
     }
     let root = PathBuf::from(root);
+    // [wsl] "wsl:<distro>": the distro's own latexmk / tectonic compile this project
+    if let Some(t) = tools_in.filter(|t| t.starts_with("wsl:") && b.engine != "overleaf") {
+        let app2 = app.clone();
+        return tauri::async_runtime::spawn_blocking(move || crate::envs::compile::compile_in_wsl(&app2, &b, &root, &t)).await.es()?.es();
+    }
     if b.engine == "overleaf" {
         return crate::overleaf::compile_on_overleaf(&app, &b, &root).await.es();
     }

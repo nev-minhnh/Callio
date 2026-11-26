@@ -58,7 +58,7 @@ export function sheetHost() {
       <div class="sh-tip" hidden></div>
     </div>
     <div class="sh-tabs"></div>
-    <div class="sh-status"><span class="sh-stat"></span></div>`;
+    <div class="sh-status"><span class="sh-stat"></span><span class="sh-zoom" title="Zoom (Ctrl + wheel)"></span></div>`;
   wire();
   return host;
 }
@@ -141,7 +141,8 @@ function layout() {
   cv.height = Math.max(1, Math.round(sc.clientHeight * d));
   cv.style.width = sc.clientWidth + "px";
   cv.style.height = sc.clientHeight + "px";
-  $(".sh-zoom", host).textContent = Math.round(S.zoom * 100) + "%";
+  const zl = $(".sh-zoom", host);
+  if (zl) zl.textContent = Math.round(S.zoom * 100) + "%";
   void r; void fw; void fh;
 }
 

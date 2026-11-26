@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.22.1
+
+- Excel workbooks: opening a workbook no longer ends with "Couldn't open …: Cannot set properties of null (setting 'textContent')". The sheet view looked for a zoom label that was missing from its status bar; the label is back (bottom right, e.g. "100%") and its absence can no longer stop a workbook from opening.
+
 ## 0.22.0
 
 - **Remote Control for Claude Code sessions.** Press the 📱 button in the session row (or type `/remote-control` or `/rc` in the chat) and the session can be continued from the Claude app on your phone or at claude.ai/code. A small panel shows the link (Copy · Open) and a QR code; "Tắt điều khiển từ xa" / "Turn off remote control" ends it. It is never switched on by itself, and it needs Claude Code signed in with your Claude account (not an API key); otherwise Callio says what to do.

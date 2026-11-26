@@ -61,3 +61,7 @@ SSH connections and server sync
   (Apache-2.0, https://github.com/AspectUnk/russh-sftp) for SSH and SFTP, and diffy
   (MIT OR Apache-2.0, https://github.com/bmwill/diffy) for three-way text merges.
   Their dependencies are listed in src-tauri/Cargo.lock.
+
+Remote Control link
+  The QR code of the Remote Control link is made with the qrcode crate
+  (MIT OR Apache-2.0, https://github.com/kennytm/qrcode-rust).

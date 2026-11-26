@@ -13,7 +13,7 @@
 /* tabs */
 .ai-sess.with-tabs { flex-wrap: wrap; row-gap: 2px; }
 .ai-sess.with-tabs #ai-sess-new { display: none; }
-.ai-tabs { flex: 1 0 100%; display: flex; align-items: center; gap: 4px; min-width: 0; padding-bottom: 2px; }
+.ai-tabs { order: -1; flex: 1 0 100%; display: flex; align-items: center; gap: 4px; min-width: 0; padding-bottom: 2px; }
 .ai-tabs[hidden] { display: none; }
 .cs-list-btn { display: flex; align-items: center; gap: 4px; flex: none; font-size: 12px; padding: 3px 7px; }
 .cs-badge, .cs-need { font-size: 10.5px; font-weight: 600; color: var(--cs-need); background: color-mix(in srgb, var(--cs-need) 15%, transparent); border-radius: 8px; padding: 0 6px; white-space: nowrap; }

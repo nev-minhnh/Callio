@@ -21,5 +21,5 @@ export async function initRpc() {
       if (v !== SELF) api.ccReply(rpc, v ?? null);
     } catch (e) { api.ccReply(rpc, `Callio error: ${e.message}`); }
   });
-  await listen("cc-rpc-cancel", ({ rpc }) => cancelFn?.(rpc));
+  await listen("cc-rpc-cancel", (p) => cancelFn?.(p.rpc, p));
 }

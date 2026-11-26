@@ -1,6 +1,6 @@
 [package]
 name = "callio"
-version = "0.21.1"
+version = "0.22.0"
 description = "Callio – Shape your folio. A lightweight editor for Markdown, LaTeX, Word, spreadsheets, presentations, PDF and pictures"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/nev-minhnh/Callio"
@@ -15,6 +15,7 @@ tauri-build = { version = "2", features = [] }
 notify = { version = "8", default-features = false }
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] } # [remote] QR code of the Remote Control link
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }

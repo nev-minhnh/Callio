@@ -41,7 +41,14 @@ onRpc("permission", (params, rpc) => { if (params.session && sessionHooks) { ses
 onRpc("editor_state", () => editorState());
 onRpc("open_file", async (params) => { await openPath(fromClaude(params.path, folder), params.line || undefined); return `Opened ${params.path}`; });
 onRpc("compile", () => compileForClaude());
-onRpcCancel((rpc) => { sessionHooks?.answered?.(rpc, null); const c = cards.get(rpc); if (c) { c.classList.add("answered"); c.querySelector(".cc-perm-actions").innerHTML = "<small>No answer — declined</small>"; cards.delete(rpc); } });
+onRpcCancel((rpc, info) => {
+  sessionHooks?.answered?.(rpc, null);
+  const c = cards.get(rpc);
+  if (!c) return;
+  cards.delete(rpc);
+  if (info?.elsewhere) { c._views?.forEach((v) => v.destroy()); c.remove(); toast("Answered on the phone", "", 2500); return; } // [remote] answered on the phone: the question is gone here too
+  c.classList.add("answered"); c.querySelector(".cc-perm-actions").innerHTML = "<small>No answer — declined</small>";
+});
 
 function editorState() {
   const t = activeTab();
@@ -165,6 +172,7 @@ export async function permissionCard(rpc, { toolName, input }, run = activeRun, 
   card.querySelector(".cc-allow-all")?.addEventListener("click", () => { if (run) run.autoEdits = true; done({ allow: true }, "Allowed (and further edits in this answer)"); });
   card.querySelector(".cc-deny").onclick = () => done({ allow: false, message: card.querySelector(".cc-deny-why").value.trim() }, "Denied");
   card.querySelector(".cc-deny-why").addEventListener("keydown", (e) => { if (e.key === "Enter") card.querySelector(".cc-deny").click(); });
+  card._views = views;
   cards.set(rpc, card);
   host.appendChild(card);
   if (focus) card.querySelector(".cc-allow").focus({ preventScroll: true });

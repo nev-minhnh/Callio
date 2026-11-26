@@ -2310,7 +2310,7 @@ body.wr-open #main { padding-right: min(380px, 92vw); transition: padding-right 
 .wr-stopped { color: #ff8a8a !important; }
 
 /* ---------------- Claude plan usage in the AI panel ---------------- */
-#ai-quota { display: inline-flex; align-items: center; gap: 10px; flex: none; max-width: 62%; overflow: hidden; border: 0; background: none; padding: 2px 6px; border-radius: 7px; color: var(--fg-2); font-size: 11px; cursor: pointer; }
+#ai-quota { display: flex; align-items: center; gap: 10px; flex: 1 0 100%; order: -2; box-sizing: border-box; max-width: 100%; overflow: hidden; border: 0; background: none; padding: 2px 6px; border-radius: 7px; color: var(--fg-2); font-size: 11px; cursor: pointer; }
 #ai-quota[hidden] { display: none; }
 #ai-quota:hover { background: var(--bg-hover); }
 #ai-quota.busy { opacity: .65; }
@@ -2324,5 +2324,5 @@ body.wr-open #main { padding-right: min(380px, 92vw); transition: padding-right 
 #ai-quota .q-note { color: var(--fg-3); }
 /* a narrow panel: the bars go first, the numbers stay */
 .ai-sess { container-type: inline-size; }
-@container (max-width: 430px) { #ai-quota .q-bar { display: none; } #ai-quota { gap: 8px; } }
+@container (max-width: 300px) { #ai-quota .q-bar { display: none; } #ai-quota { gap: 8px; } }
 @container (max-width: 330px) { #ai-sess-proj { display: none; } }

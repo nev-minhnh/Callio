@@ -16,7 +16,7 @@ import { call, listen } from "./api.js";
 import { settings, updateSettings, toast, ask, basename } from "./main.js";
 import * as host from "./host.js"; // [detach] the editor's files: this window's, or (chat window) the editor window's
 const { reloadFromDisk, refreshTree } = host;
-import { chatState, swapChat, freshChatState, resetChat, registerSessions, addMsg, loadSession, refreshAIContext, renderSessBar } from "./ai.js";
+import { chatState, swapChat, freshChatState, resetChat, registerSessions, addMsg, loadSession, refreshAIContext, renderSessBar, ccUiFor } from "./ai.js";
 import { ccRunIn, fromClaude } from "./envs-core.js"; // [wsl]
 import { toolTitle, EDIT_TOOLS, renderChanges, errorHtml, permissionCard, cards, setSessionHooks, SYSTEM, contextPreamble, projectDir } from "./claude-code.js";
 import { createStreamer } from "./stream.js";
@@ -25,6 +25,7 @@ import { registerRestorer } from "./restore.js";
 import { addVi } from "./i18n.js";
 import { ic } from "./icons.js";
 import * as act from "./activity.js";
+import * as rc from "./remote.js"; // [remote]
 import "./cc-sessions.css";
 
 // this window's label: permission questions of its sessions come back here
@@ -68,6 +69,7 @@ function makeRuntime(tab) {
     toolParent: new Map(), perms: new Map(), transcript: [],
     act: newAct(), ui: { open: false, sel: null }, writing: false, writingTimer: 0, showActivity: false,
     stopRequested: false, autoEdits: false, lastResult: null, summary: null, lastError: "", limit: false, ranOnce: false,
+    remote: null, // [remote] {on, connected, connectUrl, …}
   };
 }
 const busy = (rt) => !!rt && (rt.turnActive || rt.status === "queued");
@@ -90,7 +92,7 @@ export async function initSessions() {
   tabs.push(tab);
   active = tab;
   buildChrome();
-  registerSessions({ sendMessage, newTab, isBusy: () => busy(active?.rt), onReset, titleChanged, transcript: () => (active?.rt?.transcript || []).map((x) => ({ ...x })) });
+  registerSessions({ sendMessage, newTab, toggleRemote, isBusy: () => busy(active?.rt), onReset, titleChanged, transcript: () => (active?.rt?.transcript || []).map((x) => ({ ...x })) });
   setSessionHooks({ permission: onPermission, answered: onPermAnswered });
   await initRpc();
   await listen("cc-session", onSession);
@@ -111,6 +113,13 @@ function buildChrome() {
   sess.classList.add("with-tabs");
   dom.tabs = el("div", "ai-tabs", "ai-tabs");
   sess.prepend(dom.tabs);
+  // [remote] the 📱 button sits in the title row (the tabs row has no room to spare)
+  dom.rc = el("button", "icon small cs-rc", "cc-rc");
+  dom.rc.type = "button"; dom.rc.textContent = "📱";
+  dom.rc.title = L("Control this session from the Claude app on your phone", "Điều khiển phiên này từ ứng dụng Claude trên điện thoại");
+  dom.rc.setAttribute("aria-label", "Remote control");
+  dom.rc.onclick = () => void remoteButton();
+  $("#ai-sess-new")?.after(dom.rc);
   dom.pop = el("div", "cs-pop", "cc-sess-pop");
   dom.pop.hidden = true;
   sess.appendChild(dom.pop);
@@ -284,11 +293,7 @@ export async function sendMessage(text, prompt, ui) {
     web: settings.aiWeb === false ? "off" : (settings.aiSearchEngine && settings.aiSearchEngine !== "auto" ? settings.aiSearchEngine : ""),
     maxParallel: +settings.ccMaxParallel || 4, idleMinutes: +settings.ccIdleMinutes || 30,
   };
-  if (!rt.handle) {
-    const r = await call("cc_session_start", { req: { cwd, runOn: sshx.runOn || null, model, permissionMode: patch.permissionMode, systemAppend: patch.systemAppend, label, effort: patch.effort || null, thinking: patch.thinking, web: patch.web || null, resumeId: chat.cc.id || null, window: WIN, maxParallel: patch.maxParallel, idleMinutes: patch.idleMinutes, runIn: ccRunIn(cwd), meta: { chatSid: chat.sid, project: chat.project ?? "", title: chat.title || label, win: WIN } } });
-    rt.handle = r.handle; rt.cwd = cwd; rt.model = model;
-    byHandle.set(rt.handle, rt);
-  }
+  if (!rt.handle) await openHandle(rt, chat, cwd, model, patch, label, sshx);
   if (rt.model && rt.model !== model) rt.modelSeen = null; // switched: what the process said at start is stale
   rt.model = model;
   const m = { uuid: uid(), text, ui, delivered: false, mode };
@@ -315,6 +320,13 @@ export async function sendMessage(text, prompt, ui) {
     renderAll(true);
     throw e;
   }
+}
+
+/** Start the backend session of a tab (its Claude Code process starts with the first message, or when Remote Control is turned on). */
+async function openHandle(rt, chat, cwd, model, patch, label, sshx) {
+  const r = await call("cc_session_start", { req: { cwd, runOn: sshx.runOn || null, model, permissionMode: patch.permissionMode, systemAppend: patch.systemAppend, label, effort: patch.effort || null, thinking: patch.thinking, web: patch.web || null, resumeId: chat.cc.id || null, window: WIN, maxParallel: patch.maxParallel, idleMinutes: patch.idleMinutes, runIn: ccRunIn(cwd), meta: { chatSid: chat.sid, project: chat.project ?? "", title: chat.title || label, win: WIN } } });
+  rt.handle = r.handle; rt.cwd = cwd; rt.model = model;
+  byHandle.set(rt.handle, rt);
 }
 
 function startTurnAct(rt) {
@@ -359,8 +371,78 @@ function declineAll(rt) {
   rt.perms.clear();
 }
 
+// ---------------- Remote Control (remote.js) ----------------
+/** The session of a tab, started now if it has none yet (Remote Control can be switched on before the first message). */
+async function ensureSession(tab) {
+  const chat = chatOf(tab);
+  const rt = (tab.rt ??= makeRuntime(tab));
+  if (rt.handle) return rt;
+  const cwd = projectDir();
+  if (!cwd) throw new Error("Open a project folder or a saved file first — Claude Code works inside a folder.");
+  await host.saveInside(cwd);
+  const model = (settings.aiModel_chat || "claudecode|default").split("|")[1];
+  const label = titleOf(tab);
+  const ui = (await import("./ai.js")).ccUi(label);
+  const skills = await ui.skillsForClaude();
+  const sshx = await import("./ssh.js").then((m) => m.sessionExtras(cwd)).catch(() => ({})); // [ssh]
+  const patch = {
+    permissionMode: settings.ccPermissionMode || "default", systemAppend: SYSTEM + skills + (sshx.note ? "\n\n" + sshx.note : ""),
+    effort: /haiku/.test(model) ? "" : (settings.aiEffort || ""), thinking: settings.aiThinking !== false,
+    web: settings.aiWeb === false ? "off" : (settings.aiSearchEngine && settings.aiSearchEngine !== "auto" ? settings.aiSearchEngine : ""),
+    maxParallel: +settings.ccMaxParallel || 4, idleMinutes: +settings.ccIdleMinutes || 30,
+  };
+  await openHandle(rt, chat, cwd, model, patch, label, sshx);
+  return rt;
+}
+
+/** Turn Remote Control on (and show the link and QR code) or off for the session in view. Used by `/rc`. */
+async function toggleRemote() {
+  const tab = active;
+  try {
+    const rt = await ensureSession(tab);
+    if (rc.rcOn(rt)) { await rc.setRemote(rt, false); rc.hideRemotePanel(); renderAll(true); toast(L("Remote control is off", "Điều khiển từ xa đang tắt"), "", 2500); return; }
+    await enableRemote(rt);
+  } catch (e) { toast(String(e?.message || e), "err", 7000); }
+}
+async function enableRemote(rt) {
+  rc.showRemotePanel(rt, () => renderAll(true));
+  const p = rc.setRemote(rt, true, titleOf(rt.tab));
+  renderAll(true); rc.refreshRemotePanel(rt);
+  try { await p; } catch (e) { rc.refreshRemotePanel(rt); renderAll(true); throw e; }
+  renderAll(true); rc.refreshRemotePanel(rt);
+}
+/** The 📱 button beside the tabs: turn it on, or (when on) show the link again. */
+async function remoteButton() {
+  const rt = active?.rt;
+  if (rc.remotePanelOpen()) return rc.hideRemotePanel();
+  if (rt && rc.rcOn(rt)) { rc.showRemotePanel(rt, () => renderAll(true)); return; }
+  try {
+    const r = await ensureSession(active);
+    await enableRemote(r);
+  } catch (e) { toast(String(e?.message || e), "err", 7000); }
+}
+
 // ---------------- events from the backend ----------------
 const H = {
+  remote(rt, e) { rc.applyRemote(rt, e); rc.refreshRemotePanel(rt); renderAll(true); },
+  remote_error(rt, e) { rc.remoteFailed(rt, e.error); rc.refreshRemotePanel(rt); renderAll(true); toast(`${L("Remote control couldn't start", "Không bật được điều khiển từ xa")}: ${e.error}`, "err", 7000); },
+  bridge(rt, e) { rc.applyBridge(rt, e); rc.refreshRemotePanel(rt); renderAll(); },
+  /** Typed on the phone: shown like the author's own message, with a label. */
+  phone_msg(rt, e) {
+    if (rt.msgs.has(e.uuid)) return;
+    const c = chatOf(rt.tab);
+    const ui = ccUiFor({ text: e.text, memText: "", memAt: { project: c?.project || "", session: c?.mem, file: "", model: modelOf(rt) }, skills: [] }, c?.ctx);
+    const m = { uuid: e.uuid, text: e.text, ui, delivered: false, phone: true };
+    rt.msgs.set(e.uuid, m);
+    rt.ui0 = rt.ui0 || ui;
+    if (!rt.turnActive) { rt.turnActive = true; rt.status = "running"; startTurnAct(rt); }
+    deliver(rt, m);
+  },
+  /** Stopped from the phone. */
+  remote_interrupt(rt) {
+    rt.stopRequested = true;
+    (rt.seg || rt.lastSeg)?.toolsEl.insertAdjacentHTML("beforeend", rc.phoneStopHtml());
+  },
   status(rt, e) {
     const was = busy(rt);
     rt.status = e.status; rt.proc = !!e.proc; rt.turnActive = !!e.turnActive;
@@ -440,7 +522,7 @@ function deliver(rt, m) {
   rt.queue = rt.queue.filter((x) => x !== m);
   const had = rt.seg;
   if (had) closeSeg(rt, false);
-  addMsg("user", esc(m.text).replace(/\n/g, "<br>"), rt.tab.list);
+  addMsg("user", (m.phone ? rc.phoneLabel() + "<br>" : "") + esc(m.text).replace(/\n/g, "<br>"), rt.tab.list);
   rt.transcript.push({ role: "user", text: m.text });
   openSeg(rt, m);
   renderAll(true);
@@ -673,6 +755,8 @@ function onPermAnswered(rpc) {
     rt.perms.delete(rpc);
     const ag = p.agent && rt.act.agents.get(p.agent);
     if (ag && ag.status === "waiting") ag.status = "running";
+    // answered (here or on the phone): the "needs you" toast goes with the question
+    if (![...byHandle.values()].some((r) => r.perms.size)) act.hideToast($("#ai-panel"));
     renderAll(true);
   }
 }
@@ -706,13 +790,16 @@ function draw() {
   $(".ai-sess")?.classList.toggle("with-tabs", on);
   dom.tabs.hidden = !on;
   const rt = active?.rt;
+  dom.rc.hidden = !on;
+  dom.rc.classList.toggle("on", rc.rcOn(rt));
+  dom.rc.classList.toggle("busy", !!rt?.remote?.busy);
   if (rt) rt.showActivity = shouldShow(rt);
   const col = layout() === "column";
   act.renderStrip(dom.strip, col ? null : rt);
   act.renderColumn(dom.col, col && on ? rt : null);
   $("#ai-panel").classList.toggle("with-col", !dom.col.hidden);
   act.renderTabs(dom.tabs, {
-    tabs, active, title: titleOf, vis: (t) => act.visualOf(t.rt), needs: (t) => !!t.rt?.perms.size,
+    tabs, active, title: titleOf, vis: (t) => act.visualOf(t.rt), needs: (t) => !!t.rt?.perms.size, remote: (t) => rc.rcOn(t.rt), remoteTip: rc.rcTip,
     needCount: tabs.filter((t) => t.rt?.perms.size).length, canClose: true,
   });
   drawQueue();
@@ -757,6 +844,7 @@ function restoreButtons() {
 // ---------------- the sessions list ----------------
 function togglePop() {
   dom.pop.hidden = !dom.pop.hidden;
+  dom.pop.style.top = `${dom.tabs.offsetTop + dom.tabs.offsetHeight + 2}px`; // just under the tabs, wherever the quota line above them leaves them
   if (!dom.pop.hidden) drawPop();
 }
 async function drawPop() {
@@ -774,14 +862,14 @@ async function drawPop() {
     if (first) {
       const what = first.toolName === "Bash" || first.toolName === "PowerShell" ? first.input.command : first.input.file_path || first.toolName;
       const ag = first.agent && rt.act.agents.get(first.agent);
-      rows.push({ group: "need", handle: rt.handle, title, vis: "need", line: `${esc(ag ? act.modelLabel(ag.model || "", true) || L("Subagent", "Subagent") : act.modelLabel(modelOf(rt), true))} ${L("wants to run", "muốn chạy")} <code class="mono" data-noi18n>${esc(String(what).split("\n")[0].slice(0, 80))}</code>`, folder, model, prog: null, meta: "", perm: first.rpc, actions: ["open", "deny", "allow"] });
+      rows.push({ group: "need", remote: rc.rcOn(rt), handle: rt.handle, title, vis: "need", line: `${esc(ag ? act.modelLabel(ag.model || "", true) || L("Subagent", "Subagent") : act.modelLabel(modelOf(rt), true))} ${L("wants to run", "muốn chạy")} <code class="mono" data-noi18n>${esc(String(what).split("\n")[0].slice(0, 80))}</code>`, folder, model, prog: null, meta: "", perm: first.rpc, actions: ["open", "deny", "allow"] });
     } else if (busy(rt)) {
       const n = act.runningAgents(rt);
-      rows.push({ group: "run", handle: rt.handle, title, vis: act.visualOf(rt), line: `${act.stepHtml(rt)}${n ? ` · ${L(`${n} subagent${n === 1 ? "" : "s"}`, `${n} subagent`)}` : ""}`, folder, model, prog: ts.total ? { done: ts.done, total: ts.total } : null, meta: `${act.fmtDur(Date.now() - rt.act.startedAt)} · ${act.fmtTok(act.totalTok(rt))}`, actions: ["open"] });
+      rows.push({ group: "run", remote: rc.rcOn(rt), handle: rt.handle, title, vis: act.visualOf(rt), line: `${act.stepHtml(rt)}${n ? ` · ${L(`${n} subagent${n === 1 ? "" : "s"}`, `${n} subagent`)}` : ""}`, folder, model, prog: ts.total ? { done: ts.done, total: ts.total } : null, meta: `${act.fmtDur(Date.now() - rt.act.startedAt)} · ${act.fmtTok(act.totalTok(rt))}`, actions: ["open"] });
     } else {
       const s = rt.summary;
       const fail = rt.status === "error";
-      rows.push({ group: "done", handle: rt.handle, title, vis: fail ? "fail" : "done", line: fail ? `${L("Stopped by an error", "Dừng do lỗi")}${rt.lastError ? `: ${esc(String(rt.lastError).split("\n")[0].slice(0, 70))}` : ""}` : s ? `${L(`Changed ${s.files} file${s.files === 1 ? "" : "s"}`, `Sửa ${s.files} tệp`)} <span class="add">+${s.added}</span> <span class="del">−${s.removed}</span>` : L("Done", "Xong"), folder, model, prog: null, meta: act.ago(rt.act.endedAt || Date.now()), actions: fail ? ["open", "resume"] : s ? ["open", "changes"] : ["open"] });
+      rows.push({ group: "done", remote: rc.rcOn(rt), handle: rt.handle, title, vis: fail ? "fail" : "done", line: fail ? `${L("Stopped by an error", "Dừng do lỗi")}${rt.lastError ? `: ${esc(String(rt.lastError).split("\n")[0].slice(0, 70))}` : ""}` : s ? `${L(`Changed ${s.files} file${s.files === 1 ? "" : "s"}`, `Sửa ${s.files} tệp`)} <span class="add">+${s.added}</span> <span class="del">−${s.removed}</span>` : L("Done", "Xong"), folder, model, prog: null, meta: act.ago(rt.act.endedAt || Date.now()), actions: fail ? ["open", "resume"] : s ? ["open", "changes"] : ["open"] });
     }
   }
   const sorted = ["need", "run", "done"].flatMap((g) => rows.filter((r) => r.group === g));
@@ -846,7 +934,8 @@ async function restoreTab(j) {
   const rt = (tab.rt = makeRuntime(tab));
   rt.cwd = j.cwd; rt.model = j.model || null; rt.lastError = "";
   const s = j.settings || {};
-  const r = await call("cc_session_start", { req: { handle: j.handle, cwd: j.cwd, model: j.model || null, permissionMode: s.permissionMode || settings.ccPermissionMode || "default", systemAppend: SYSTEM, label: j.label || "", effort: s.effort || null, thinking: s.thinking !== false, web: s.web || null, resumeId: j.claudeId || null, restored: true, window: WIN, meta, maxParallel: +settings.ccMaxParallel || 4, idleMinutes: +settings.ccIdleMinutes || 30, runIn: ccRunIn(j.cwd) } });
+  const r = await call("cc_session_start", { req: { handle: j.handle, cwd: j.cwd, model: j.model || null, permissionMode: s.permissionMode || settings.ccPermissionMode || "default", systemAppend: SYSTEM, label: j.label || "", effort: s.effort || null, thinking: s.thinking !== false, web: s.web || null, resumeId: j.claudeId || null, restored: true, window: WIN, meta, maxParallel: +settings.ccMaxParallel || 4, idleMinutes: +settings.ccIdleMinutes || 30, runIn: ccRunIn(j.cwd), remoteControl: j.remoteControl?.on ? j.remoteControl : null } });
+  if (j.remoteControl?.on) rt.remote = { on: true, connected: false, connectUrl: j.remoteControl.connectUrl || null, bridgeSessionId: j.remoteControl.bridgeSessionId || null }; // [remote] the backend turns it on again with the new process
   rt.handle = r.handle;
   byHandle.set(rt.handle, rt);
   rt.status = "error"; rt.ranOnce = true; rt.act.endedAt = Date.now();
@@ -957,7 +1046,7 @@ function exportRt(rt) {
     turnActive: rt.turnActive, serverQueue: plain(rt.serverQueue), transcript: plain(rt.transcript), act: exportAct(rt.act),
     queue: rt.queue.filter((m) => !m.delivered).map(msgOut), pendingNow: [...rt.msgs.values()].filter((m) => !m.delivered && !rt.queue.includes(m)).map(msgOut),
     ui: { open: !!rt.ui.open, sel: rt.ui.sel || null }, showActivity: rt.showActivity, stopRequested: rt.stopRequested, autoEdits: rt.autoEdits,
-    lastResult: plain(rt.lastResult), summary: plain(rt.summary), lastError: rt.lastError, limit: rt.limit, ranOnce: rt.ranOnce,
+    lastResult: plain(rt.lastResult), summary: plain(rt.summary), lastError: rt.lastError, limit: rt.limit, ranOnce: rt.ranOnce, remote: plain(rt.remote),
     ui0: rt.ui0?.desc || null, toolParent: [...rt.toolParent], seq: seen.get(rt.handle) || 0,
     // an answer is being written: the next block of it carries on in the new window
     cont: !!(rt.turnActive && (rt.ui0?.desc || rt.lastSeg?.m?.ui?.desc)), contDesc: rt.lastSeg?.m?.ui?.desc || rt.ui0?.desc || null,
@@ -1055,7 +1144,7 @@ function importRt(tab, d, ai) {
     handle: d.handle, status: d.status, proc: d.proc, claudeId: d.claudeId, cwd: d.cwd, model: d.model, modelSeen: d.modelSeen, turnActive: d.turnActive,
     serverQueue: d.serverQueue || [], transcript: d.transcript || [], act: importAct(d.act), ui: { open: !!d.ui?.open, sel: d.ui?.sel || null },
     showActivity: d.showActivity, stopRequested: d.stopRequested, autoEdits: d.autoEdits, lastResult: d.lastResult, summary: d.summary, lastError: d.lastError || "",
-    limit: !!d.limit, ranOnce: d.ranOnce, toolParent: new Map(d.toolParent || []),
+    limit: !!d.limit, ranOnce: d.ranOnce, toolParent: new Map(d.toolParent || []), remote: d.remote || null,
   });
   const mk = (m) => ({ uuid: m.uuid, text: m.text, mode: m.mode, delivered: false, slot: !!m.slot, ui: m.desc ? ai.ccUiFor(m.desc, c.ctx) : rt.ui0 });
   if (d.ui0) rt.ui0 = ai.ccUiFor(d.ui0, c.ctx);

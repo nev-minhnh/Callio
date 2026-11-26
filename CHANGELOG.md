@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.22.0
+
+- **Remote Control for Claude Code sessions.** Press the 📱 button in the session row (or type `/remote-control` or `/rc` in the chat) and the session can be continued from the Claude app on your phone or at claude.ai/code. A small panel shows the link (Copy · Open) and a QR code; "Tắt điều khiển từ xa" / "Turn off remote control" ends it. It is never switched on by itself, and it needs Claude Code signed in with your Claude account (not an API key); otherwise Callio says what to do.
+- Things typed on the phone appear in the transcript like your own messages, labelled "📱 từ điện thoại" / "📱 from the phone", and stopping a turn from the phone shows it as stopped. A 📱 marks the session on its tab and in the sessions list; while it is on, the session is kept open (not closed when idle) so the phone can write at any time. Remote Control survives idle restarts, a chat pop-out and a crash recovery: the phone keeps the same conversation.
+- **Approval questions are answered in either place.** They follow your "When Claude Code wants to change files or run commands" setting (Full access asks nobody, Auto asks only what Claude Code's auto mode escalates, Ask asks every time) and show on the phone as well as in Callio. Answer in one place and the card closes in the other, together with its "Cần bạn" toast, badge and the Allow/Deny in the activity strip and sessions list. Callio now receives these questions straight from Claude Code instead of through its own MCP tool; Callio's own tools stay auto-allowed.
+- The plan-usage meters (5h · Week · Fable) now have a line of their own, directly above the sessions row, in the AI panel and in the chat window.
+
 ## 0.21.1
 
 - Claude Code chat: the line above each answer now names the model that actually wrote it, as reported by Claude Code, and follows a model switch made in the middle of a session. Before, it could keep showing the model the session started with, or the one picked in the menu before Claude Code had switched. Subagents in the activity strip and column likewise show the model they really run on, not only the one their task asked for.

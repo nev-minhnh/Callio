@@ -99,7 +99,7 @@ export function renderTabs(el, s) {
     <button type="button" class="cs-list-btn" data-a="list" aria-haspopup="dialog" title="All Claude Code sessions">${ic("list")}<span>Sessions</span>${need ? `<b class="cs-badge">${L(`${need} need you`, `${need} cần bạn`)}</b>` : ""}</button>
     <div class="cs-tabs" role="tablist" aria-label="Open sessions">${s.tabs.map((t) => {
       const vis = s.vis(t);
-      return `<div class="cs-tab ${t === s.active ? "on" : ""} v-${vis}" role="tab" aria-selected="${t === s.active}" data-tab="${t.id}" tabindex="${t === s.active ? 0 : -1}"><span class="cs-dot ${vis}"></span><span class="cs-tab-title" data-noi18n>${esc(s.title(t))}</span>${s.needs(t) ? `<b class="cs-need">${L("Needs you", "Cần bạn")}</b>` : ""}${t.unseen && t !== s.active ? `<i class="cs-unseen" title="New activity"></i>` : ""}<button type="button" class="cs-x" data-a="close" aria-label="Close session" title="Close session">${ic("x")}</button></div>`;
+      return `<div class="cs-tab ${t === s.active ? "on" : ""} v-${vis}" role="tab" aria-selected="${t === s.active}" data-tab="${t.id}" tabindex="${t === s.active ? 0 : -1}"><span class="cs-dot ${vis}"></span><span class="cs-tab-title" data-noi18n>${esc(s.title(t))}</span>${s.remote?.(t) ? `<span class="cs-ph" title="${esc(s.remoteTip())}">📱</span>` : ""}${s.needs(t) ? `<b class="cs-need">${L("Needs you", "Cần bạn")}</b>` : ""}${t.unseen && t !== s.active ? `<i class="cs-unseen" title="New activity"></i>` : ""}<button type="button" class="cs-x" data-a="close" aria-label="Close session" title="Close session">${ic("x")}</button></div>`;
     }).join("")}</div>
     <button type="button" class="icon small cs-new" data-a="new" title="New session" aria-label="New session">${ic("plus")}</button>`;
 }
@@ -247,7 +247,7 @@ export function renderList(el, rows, info) {
     if (!rs.length) return "";
     return `<div class="grp ${g}">${name}</div>` + rs.map((r) => `<div class="sess ${g}" data-h="${esc(r.handle)}">
       ${r.vis === "done" ? `<span class="cs-ico ok">${ic("check")}</span>` : r.vis === "fail" ? `<span class="cs-ico err">${ic("x")}</span>` : `<span class="cs-dot ${r.vis}"></span>`}
-      <div class="sess-main"><b data-noi18n>${esc(r.title)}</b><span class="small">${r.line}${r.folder ? ` · <span data-noi18n>${esc(r.folder)}/</span>` : ""}${r.model ? ` · <span data-noi18n>${esc(r.model)}</span>` : ""}</span></div>
+      <div class="sess-main"><b data-noi18n>${esc(r.title)}${r.remote ? ` <span class="cs-ph" title="${L("Remote control is on", "Điều khiển từ xa đang bật")}">📱</span>` : ""}</b><span class="small">${r.line}${r.folder ? ` · <span data-noi18n>${esc(r.folder)}/</span>` : ""}${r.model ? ` · <span data-noi18n>${esc(r.model)}</span>` : ""}</span></div>
       ${r.prog ? `<span class="act-prog">${r.prog.done}/${r.prog.total}<i class="bar"><i style="width:${Math.round((r.prog.done / r.prog.total) * 100)}%"></i></i></span>` : ""}
       ${r.meta ? `<span class="small meta">${esc(r.meta)}</span>` : ""}
       <span class="sess-actions">${r.actions.map((a) => ({

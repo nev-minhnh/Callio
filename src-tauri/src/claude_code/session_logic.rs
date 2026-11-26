@@ -35,6 +35,60 @@ pub fn control_line(request_id: &str, request: Value) -> String {
     json!({"type": "control_request", "request_id": request_id, "request": request}).to_string()
 }
 
+/// The answer to a Claude Code control request (`can_use_tool` and friends), as a stdin line.
+pub fn control_response_line(request_id: &str, body: Value) -> String {
+    json!({"type": "control_response", "response": {"subtype": "success", "request_id": request_id, "response": body}}).to_string()
+}
+
+pub fn control_error_line(request_id: &str, error: &str) -> String {
+    json!({"type": "control_response", "response": {"subtype": "error", "request_id": request_id, "error": error}}).to_string()
+}
+
+/// What the window's permission card is told about a `can_use_tool` request (the same fields the
+/// old MCP `approve` path sent, plus why Claude Code is asking).
+pub fn perm_params(req: &Value, session: &str) -> Value {
+    json!({
+        "toolName": req["tool_name"], "input": if req["input"].is_object() { req["input"].clone() } else { json!({}) },
+        "session": session, "toolUseId": req["tool_use_id"], "agentId": req["agent_id"],
+        "reason": req["decision_reason"], "blockedPath": req["blocked_path"],
+    })
+}
+
+/// The window's answer ({allow: true} | {allow: false, message}; None = nobody answered) as the
+/// body of the control response Claude Code expects (`behavior: allow|deny`).
+pub fn perm_body(answer: Option<&Value>, input: &Value, tool_use_id: Option<&str>) -> Value {
+    let mut b = match answer {
+        Some(a) if a["allow"].as_bool() == Some(true) => json!({"behavior": "allow", "updatedInput": input}),
+        Some(a) => json!({"behavior": "deny", "message": a["message"].as_str().filter(|m| !m.is_empty()).map(|m| format!("The author declined: {m}")).unwrap_or_else(|| "The author declined this action.".into())}),
+        None => json!({"behavior": "deny", "message": "No answer from the author."}),
+    };
+    if let Some(id) = tool_use_id.filter(|i| !i.is_empty()) {
+        b["toolUseID"] = json!(id);
+    }
+    b
+}
+
+/// May the idle check close a session's process? Never while a turn runs, messages wait for a
+/// slot, or Remote Control is on (the phone may write at any time).
+pub fn idle_closable(proc_alive: bool, turn_active: bool, nothing_waiting: bool, remote_on: bool, idle_for: std::time::Duration, limit: std::time::Duration) -> bool {
+    proc_alive && !turn_active && nothing_waiting && !remote_on && idle_for > limit
+}
+
+/// A Remote Control error from Claude Code, said so the author knows what to do.
+pub fn friendly_rc_error(err: &str) -> String {
+    let e = err.to_lowercase();
+    if e.contains("subscription") || e.contains("sign-in") || e.contains("sign in") || e.contains("full-scope") || e.contains("login") || e.contains("api key") || e.contains("oauth") || e.contains("claude.ai") {
+        return "Remote Control needs Claude Code signed in with your Claude account (not an API key). Sign in with /login in a terminal, then try again.".into();
+    }
+    if e.contains("policy") || e.contains("not available for") || e.contains("disabled") || e.contains("organization") || e.contains("allow_remote_control") {
+        return format!("Remote Control isn't available for this plan or organization ({}).", err.trim().trim_end_matches('.'));
+    }
+    if e.contains("network") || e.contains("timed out") || e.contains("timeout") || e.contains("econn") || e.contains("enotfound") || e.contains("fetch failed") || e.contains("connect") {
+        return format!("Couldn't reach Claude's servers for Remote Control. Check the internet connection and try again ({}).", err.trim().trim_end_matches('.'));
+    }
+    if err.trim().is_empty() { "Remote Control couldn't start.".into() } else { err.trim().to_string() }
+}
+
 fn short(s: &str, n: usize) -> String {
     let one: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
     if one.chars().count() <= n {
@@ -101,6 +155,8 @@ pub fn translate(v: &Value, tr: &mut Tracker, ui_event: &dyn Fn(&Value) -> Optio
         ("system", "init") => {
             out.push(json!({"kind": "init", "model": v["model"], "sessionId": v["session_id"], "mcp": v["mcp_servers"], "permissionMode": v["permissionMode"], "version": v["claude_code_version"]}));
         }
+        // Remote Control's connection to claude.ai: connected / ready / reconnecting / failed …
+        ("system", "bridge_state") => out.push(json!({"kind": "bridge", "state": v["state"], "detail": v["detail"], "failure": v["failure_kind"]})),
         ("system", "session_state_changed") => out.push(json!({"kind": "state", "state": v["state"]})),
         ("system", "task_started") => out.push(json!({"kind": "agent", "phase": "start", "taskId": v["task_id"], "toolUseId": v["tool_use_id"], "description": v["description"], "subagentType": v["subagent_type"], "prompt": v["prompt"], "taskType": v["task_type"], "background": v["is_backgrounded"], "parentTaskId": v["parent_task_id"]})),
         ("system", "task_progress") => out.push(json!({"kind": "agent", "phase": "progress", "taskId": v["task_id"], "toolUseId": v["tool_use_id"], "description": v["description"], "subagentType": v["subagent_type"], "usage": {"tokens": u(&v["usage"]["total_tokens"]), "toolUses": u(&v["usage"]["tool_uses"]), "durationMs": u(&v["usage"]["duration_ms"])}, "lastTool": v["last_tool_name"], "summary": v["summary"]})),
@@ -202,6 +258,47 @@ mod tests {
         assert_eq!(l["priority"], "next");
         let c: Value = serde_json::from_str(&control_line("r1", json!({"subtype": "interrupt", "cancel_queued": true}))).unwrap();
         assert_eq!(c["request"]["subtype"], "interrupt");
+    }
+    #[test]
+    fn permissions() {
+        let req = json!({"tool_name": "Bash", "input": {"command": "ls"}, "tool_use_id": "tu1", "agent_id": "ag", "decision_reason": "why"});
+        let p = perm_params(&req, "cs-1");
+        assert_eq!(p["toolName"], "Bash");
+        assert_eq!(p["toolUseId"], "tu1");
+        assert_eq!(p["session"], "cs-1");
+        let input = json!({"command": "ls"});
+        let a = perm_body(Some(&json!({"allow": true})), &input, Some("tu1"));
+        assert_eq!(a["behavior"], "allow");
+        assert_eq!(a["updatedInput"], input);
+        assert_eq!(a["toolUseID"], "tu1");
+        let d = perm_body(Some(&json!({"allow": false, "message": "no way"})), &input, None);
+        assert_eq!(d["behavior"], "deny");
+        assert!(d["message"].as_str().unwrap().contains("no way"));
+        assert!(d.get("toolUseID").is_none());
+        assert_eq!(perm_body(None, &input, None)["message"], "No answer from the author.");
+        let l: Value = serde_json::from_str(&control_response_line("r9", a)).unwrap();
+        assert_eq!(l["response"]["request_id"], "r9");
+        assert_eq!(l["response"]["response"]["behavior"], "allow");
+    }
+    #[test]
+    fn idle_close_rules() {
+        use std::time::Duration as D;
+        assert!(idle_closable(true, false, true, false, D::from_secs(1900), D::from_secs(1800)));
+        assert!(!idle_closable(true, false, true, true, D::from_secs(99999), D::from_secs(1800)), "never while Remote Control is on");
+        assert!(!idle_closable(true, true, true, false, D::from_secs(99999), D::from_secs(1800)));
+        assert!(!idle_closable(true, false, false, false, D::from_secs(99999), D::from_secs(1800)));
+        assert!(!idle_closable(false, false, true, false, D::from_secs(99999), D::from_secs(1800)));
+        assert!(!idle_closable(true, false, true, false, D::from_secs(5), D::from_secs(1800)));
+    }
+    #[test]
+    fn remote_errors() {
+        assert!(friendly_rc_error("Remote Control requires a claude.ai subscription. Run /login").contains("signed in with your Claude account"));
+        assert!(friendly_rc_error("Remote Control is not available inside a cloud session.").contains("cloud session"));
+        assert!(friendly_rc_error("fetch failed: ECONNRESET").contains("internet"));
+        assert!(friendly_rc_error("Remote Control is disabled by policy").contains("plan or organization"));
+        let e = translate(&json!({"type": "system", "subtype": "bridge_state", "state": "failed", "detail": "x", "failure_kind": "terminal"}), &mut Tracker::default(), &|_| None);
+        assert_eq!(e[0]["kind"], "bridge");
+        assert_eq!(e[0]["state"], "failed");
     }
     #[test]
     fn steps() {

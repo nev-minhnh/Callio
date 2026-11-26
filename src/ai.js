@@ -990,6 +990,7 @@ async function openMemoryDialog() {
 }
 
 // ---------------- "/" skills and commands in the chat box ----------------
+const remoteCmd = () => (ccx?.toggleRemote && settings.ccEnabled && isCCModel(modelFor("chat")) ? ccx.toggleRemote() : toast("Remote control works with Claude Code chats: switch Claude Code on in the AI settings and pick it as the model.", "", 4000));
 const BUILTINS = [
   { name: "new", description: "Start a new chat", run: () => newChat() },
   { name: "clear", description: "Clear the chat (same as /new)", run: () => newChat() },
@@ -997,6 +998,9 @@ const BUILTINS = [
   { name: "verify-bib", description: "Check every reference in a .bib file against Crossref/OpenAlex", run: () => verifyBib() },
   { name: "skills", description: "Choose which skills are active", run: async () => { await scanSkills(); openSkillsDialog(); } },
   { name: "remember", description: "Pin a fact, preference or decision for this project (/remember …)", run: null },
+  // [remote] Remote Control for the Claude Code session in view (handled here, never sent to the model)
+  { name: "remote-control", description: "Control this Claude Code session from the Claude app on your phone (turns Remote Control on or off)", run: () => remoteCmd() },
+  { name: "rc", description: "Short for /remote-control", run: () => remoteCmd() },
   { name: "memory", description: "See or forget what is remembered about this project (/memory update writes the notes)", run: () => openMemoryDialog() },
   { name: "brief", description: "A short overview of this project: what it is, what was decided, what's open (made on request only)", run: () => brief() },
   { name: "library", description: "Open the paper library", run: () => import("./library.js").then((m) => m.openLibrary()) },

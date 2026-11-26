@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
@@ -69,17 +69,54 @@ pub fn cancel_all() {
     }
 }
 
+/// A permission question that arrived over stdio (`can_use_tool`): the session manager keeps this
+/// to withdraw the card when Claude Code says the question was answered somewhere else (the phone).
+#[derive(Default)]
+pub struct PermReq {
+    pub rpc: AtomicU64,
+    pub elsewhere: AtomicBool,
+}
+
+impl PermReq {
+    /// The question was answered elsewhere: take its card away.
+    pub fn withdraw(&self) {
+        self.elsewhere.store(true, Ordering::SeqCst);
+        let rpc = self.rpc.load(Ordering::SeqCst);
+        if rpc != 0 {
+            if let Some(m) = PENDING.lock().unwrap().as_mut() {
+                m.remove(&rpc); // the waiting question ends without an answer
+            }
+        }
+    }
+}
+
 async fn ask_window(app: &AppHandle, method: &str, params: Value, timeout: Duration) -> Option<Value> {
+    ask_window_for(app, method, params, timeout, None).await
+}
+
+/// Same as `ask_window`; `track` lets the caller withdraw the question later (see `PermReq`).
+pub async fn ask_window_for(app: &AppHandle, method: &str, params: Value, timeout: Duration, track: Option<Arc<PermReq>>) -> Option<Value> {
     let rpc = SEQ.fetch_add(1, Ordering::SeqCst);
+    if let Some(t) = &track {
+        t.rpc.store(rpc, Ordering::SeqCst);
+        if t.elsewhere.load(Ordering::SeqCst) {
+            return None; // already answered elsewhere before the card was made
+        }
+    }
     let (tx, rx) = oneshot::channel();
     let msg = json!({"rpc": rpc, "method": method, "params": params});
     PENDING.lock().unwrap().get_or_insert_with(HashMap::new).insert(rpc, Open { tx, msg: msg.clone() });
+    if track.as_ref().map(|t| t.elsewhere.load(Ordering::SeqCst)).unwrap_or(false) {
+        PENDING.lock().unwrap().as_mut().map(|m| m.remove(&rpc));
+        return None; // withdrawn while the question was being set up
+    }
     // Removes the question and its card however this ends — answered, timed out, or
     // dropped because Claude Code went away.
     struct Guard<'a> {
         app: &'a AppHandle,
         rpc: u64,
         answered: bool,
+        elsewhere: Option<Arc<PermReq>>,
     }
     impl Drop for Guard<'_> {
         fn drop(&mut self) {
@@ -87,11 +124,12 @@ async fn ask_window(app: &AppHandle, method: &str, params: Value, timeout: Durat
                 m.remove(&self.rpc);
             }
             if !self.answered {
-                let _ = self.app.emit("cc-rpc-cancel", json!({"rpc": self.rpc})); // (any window may hold the card)
+                let elsewhere = self.elsewhere.as_ref().map(|t| t.elsewhere.load(Ordering::SeqCst)).unwrap_or(false);
+                let _ = self.app.emit("cc-rpc-cancel", json!({"rpc": self.rpc, "elsewhere": elsewhere})); // (any window may hold the card)
             }
         }
     }
-    let mut g = Guard { app, rpc, answered: false };
+    let mut g = Guard { app, rpc, answered: false, elsewhere: track.clone() };
     // a session's question goes to the window that owns the session; anything else to the window being used
     let owner = params["session"].as_str().and_then(crate::claude_code::session::window_of);
     match owner {

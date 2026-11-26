@@ -379,6 +379,9 @@ fn main() {
             claude_code::session::cc_session_meta,
             claude_code::session::cc_journal_list,
             claude_code::session::cc_journal_end,
+            // [remote] commands
+            claude_code::session::cc_session_remote,
+            claude_code::session::cc_qr_svg,
 
             // [chat-ui] commands
             chat_ui::session_marker_begin,

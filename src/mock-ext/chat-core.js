@@ -16,12 +16,41 @@ const FORCE = () => typeof window !== "undefined" && window.__ccForce;
 const live = new Map(); // handle → session
 const journals = new Map(); // handle → last journal object written
 const rpcWaiters = new Map();
+const rpcInfo = new Map(); // [remote] rpc → {handle, requestId, tool, input, toolUseId}: what the stdio `can_use_tool` request said
 let rpcSeq = 9000, handleSeq = 0, idSeq = 0;
 const maxPar = () => window.__ccMock?.maxParallel || 4;
 
 if (typeof window !== "undefined") {
   window.__ccMock = Object.assign(window.__ccMock || {}, {
     journals, live, sent: [], controls: [], rpcWaiters,
+    // [remote] what the real session manager would exchange with Claude Code over stdio
+    controlRequests: [], controlResponses: [], cancels: [], autoAnswered: [], remoteError: null,
+    /** The phone answers the oldest open question of a session: Claude Code sends control_cancel_request, the card closes here. */
+    phoneAnswer(handle, allow = true) {
+      const rpc = [...rpcInfo].find(([, i]) => i.handle === handle)?.[0];
+      if (!rpc) return false;
+      const i = rpcInfo.get(rpc); rpcInfo.delete(rpc);
+      window.__ccMock.cancels.push(i.requestId);
+      const w = rpcWaiters.get(rpc); rpcWaiters.delete(rpc);
+      live.get(handle)?.rpcs.delete(rpc);
+      emit("cc-rpc-cancel", { rpc, elsewhere: true }); // (broadcast: whichever window holds the card closes it)
+      w?.({ allow, fromPhone: true });
+      return true;
+    },
+    /** Something typed on the phone while Remote Control is on (the stdio echo of a user message Callio did not write). */
+    phoneMessage(handle, text) {
+      const s = live.get(handle);
+      if (!s || !s.remoteWant) return false;
+      const m = { uuid: uuid(), text, mode: "next", at: now() };
+      ev(s, "phone_msg", { uuid: m.uuid, text, at: m.at });
+      if (s.turn) s.pending.push(m); else { s.inbox.push(m); runTurn(s); }
+      return true;
+    },
+    phoneInterrupt(handle) { const s = live.get(handle); if (!s) return false; s.abort = true; ev(s, "remote_interrupt"); return true; },
+    /** What the idle check of the session manager does: it never closes a process while Remote Control is on. */
+    idleClose(handle) { const s = live.get(handle); if (!s || s.turn || !s.proc || s.remoteWant) return false; s.proc = false; status(s, "idle"); return true; },
+    /** The process was recycled (idle close, crash): the next message starts a new one and Remote Control is turned on again. */
+    recycle(handle) { const s = live.get(handle); if (!s) return false; s.proc = false; if (s.remote) { s.remote = null; ev(s, "remote", remoteState(s)); } journal(s); return true; },
     /** Forget every live session without a clean end (what a power cut leaves behind). */
     crash() { for (const s of live.values()) s.abort = true; live.clear(); },
     seedJournal(j) { journals.set(j.handle, { cleanEnd: false, status: "running", queued: [], meta: {}, settings: {}, createdAt: now(), updatedAt: now(), ...j }); },
@@ -38,7 +67,16 @@ function status(s, st) {
 }
 function journal(s) {
   const clean = !s.turn && !s.pending.length && !s.restoredPending;
-  journals.set(s.handle, { handle: s.handle, status: s.status, proc: s.proc, turnActive: s.turn, claudeId: s.claudeId, cwd: s.req.cwd, model: s.req.model, label: s.req.label, step: s.step, todos: s.todos, queued: s.pending.map((m) => ({ uuid: m.uuid, text: m.text, mode: m.mode, at: m.at, sent: true })), tokens: s.tokens, createdAt: s.created, updatedAt: now(), cleanEnd: s.ended ? true : clean, meta: s.meta, settings: { permissionMode: s.req.permissionMode, effort: s.req.effort, thinking: s.req.thinking, web: s.req.web } });
+  journals.set(s.handle, { handle: s.handle, status: s.status, proc: s.proc, turnActive: s.turn, claudeId: s.claudeId, cwd: s.req.cwd, model: s.req.model, label: s.req.label, step: s.step, todos: s.todos, queued: s.pending.map((m) => ({ uuid: m.uuid, text: m.text, mode: m.mode, at: m.at, sent: true })), tokens: s.tokens, createdAt: s.created, updatedAt: now(), cleanEnd: s.ended ? true : clean, meta: s.meta, settings: { permissionMode: s.req.permissionMode, effort: s.req.effort, thinking: s.req.thinking, web: s.req.web }, remoteControl: remoteState(s) });
+}
+function remoteState(s) { return { on: !!s.remoteWant, connected: !!s.remote, bridgeSessionId: s.bridgeId || null, connectUrl: s.remote?.connectUrl || null, environmentId: s.remote ? "env_mock" : null }; }
+/** Which tool calls Claude Code asks about, by permission mode (what the real one decides before it sends can_use_tool). */
+function needsAsk(mode, tool, input) {
+  const escalated = /rm -rf|# escalated/.test(input?.command || "");
+  if (mode === "bypassPermissions") return false;
+  if (mode === "auto") return escalated;
+  if (mode === "acceptEdits") return !["Edit", "MultiEdit", "Write"].includes(tool);
+  return true;
 }
 const assistant = (s, parent, text, tools = []) => ev(s, "ev", { ev: { t: "assistant", text, tools, model: "claude-opus-5-5", parent: parent || null } });
 const results = (s, parent, rs) => ev(s, "ev", { ev: { t: "tool_results", results: rs, parent: parent || null } });
@@ -58,7 +96,11 @@ async function pause(s, ms) {
   return !s.abort;
 }
 async function ask(s, toolName, input, parent, toolUseId) {
+  if (!needsAsk(s.req.permissionMode || "default", toolName, input)) { window.__ccMock.autoAnswered.push({ handle: s.handle, tool: toolName }); return { allow: true, auto: true }; }
   const rpc = ++rpcSeq;
+  const requestId = "req-" + rpc;
+  rpcInfo.set(rpc, { handle: s.handle, requestId, tool: toolName, input, toolUseId });
+  window.__ccMock.controlRequests.push({ handle: s.handle, request_id: requestId, request: { subtype: "can_use_tool", tool_name: toolName, input, tool_use_id: toolUseId, agent_id: parent || undefined } });
   s.perms++;
   status(s, "waiting");
   const v = await new Promise((res) => { rpcWaiters.set(rpc, res); s.rpcs.add(rpc); (window.__mockRpcEmit || emit)("cc-rpc", { rpc, method: "permission", params: { toolName, input, session: s.handle, toolUseId } }); });
@@ -104,6 +146,21 @@ async function work(s, m) {
     results(s, null, [{ id: "ag2", isError: !ok, text: "done" }]);
     s.todos = todos.map((x) => ({ ...x, status: "completed" })); ev(s, "todos", { todos: s.todos });
     await say(s, ok ? "\n\nBoth subagents finished. Nine uses were renamed and the tests pass." : "\n\nThe second subagent was not allowed to run the tests.");
+    return;
+  }
+  if (/perm/i.test(t)) {
+    // one edit, one ordinary command, one risky command: which of them ask depends on the permission mode
+    const calls = [["Edit", { file_path: `${s.req.cwd}/a.md`, old_string: "x", new_string: "y" }], ["Bash", { command: "npm test" }], ["Bash", { command: "rm -rf build/ # escalated" }]];
+    const out = [];
+    for (const [tool, input] of calls) {
+      const id = "P" + (idSeq++);
+      assistant(s, null, "", [{ id, name: tool, input }]); step(s, tool, tool === "Bash" ? input.command : "a.md", id);
+      const ans = await ask(s, tool, input, null, id);
+      if (s.abort) return;
+      out.push(ans?.allow ? "allowed" : "denied");
+      results(s, null, [{ id, isError: !ans?.allow, text: ans?.allow ? "ok" : "denied" }]);
+    }
+    await say(s, `Done: ${out.join(", ")}.`);
     return;
   }
   if (/long/i.test(t)) {
@@ -170,22 +227,39 @@ function get(h) { const s = live.get(h); if (!s) throw "This session isn't open 
 
 export async function handle(cmd, a) {
   if (cmd === "cc_status" && FORCE()) return { installed: true, path: "C:/Users/me/.local/bin/claude.exe", version: "2.1.332 (Claude Code)", loggedIn: true, auth: { loggedIn: true, authMethod: "claude.ai", email: "me@example.com" }, gitBash: true };
-  if (cmd === "cc_reply") { const w = rpcWaiters.get(a.rpc); if (!w) return undefined; rpcWaiters.delete(a.rpc); w(a.value); return null; }
+  if (cmd === "cc_qr_svg") return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 21 21" shape-rendering="crispEdges"><rect width="21" height="21" fill="#fff"/><path fill="#000" d="M1 1h7v7H1zM13 1h7v7h-7zM1 13h7v7H1zM10 10h2v2h-2zM14 12h3v3h-3zM10 16h3v3h-3z"/></svg>`;
+  if (cmd === "cc_reply") {
+    const w = rpcWaiters.get(a.rpc); if (!w) return undefined; rpcWaiters.delete(a.rpc);
+    const i = rpcInfo.get(a.rpc); rpcInfo.delete(a.rpc);
+    if (i) {
+      // what session.rs writes back to Claude Code (perm_body)
+      const v = a.value || {};
+      const body = v.allow === true ? { behavior: "allow", updatedInput: i.input } : { behavior: "deny", message: v.message ? `The author declined: ${v.message}` : "The author declined this action." };
+      if (i.toolUseId) body.toolUseID = i.toolUseId;
+      window.__ccMock.controlResponses.push({ handle: i.handle, request_id: i.requestId, response: body });
+    }
+    w(a.value); return null;
+  }
   if (!/^cc_(session|journal)_/.test(cmd)) return undefined;
   const M = window.__ccMock;
   switch (cmd) {
     case "cc_session_start": {
       const req = a.req;
       const handle = req.handle || `cc-${++handleSeq}-${uuid()}`;
-      const s = { handle, req, status: "idle", proc: false, turn: false, claudeId: req.resumeId || null, pending: [], inbox: [], perms: 0, rpcs: new Set(), todos: [], step: null, tokens: 0, created: now(), meta: req.meta || {}, abort: false, restoredPending: !!req.restored };
+      const s = { handle, req, status: "idle", proc: false, turn: false, claudeId: req.resumeId || null, pending: [], inbox: [], perms: 0, rpcs: new Set(), todos: [], step: null, tokens: 0, created: now(), meta: req.meta || {}, abort: false, restoredPending: !!req.restored, remoteWant: !!req.remoteControl?.on, bridgeId: req.remoteControl?.bridgeSessionId || null, remote: null };
       live.set(handle, s);
       journal(s);
+      // [remote] it was on when the app stopped: the process starts at once and turns it on again
+      if (s.remoteWant) setTimeout(() => { s.proc = true; M.controls.push({ handle, control: "remote_control", enabled: true, reattach_session_id: s.bridgeId }); s.remote = { connectUrl: `https://claude.ai/code/session_${s.bridgeId}` }; ev(s, "remote", remoteState(s)); journal(s); }, 80);
       return { handle };
     }
     case "cc_session_send": {
       const s = get(a.handle);
       const m = { uuid: a.uuid || uuid(), text: a.text, mode: a.mode, at: now() };
       M.sent.push({ handle: s.handle, text: a.text, mode: a.mode, patch: a.patch });
+      if (a.patch?.permissionMode) { if (a.patch.permissionMode !== s.req.permissionMode) M.controls.push({ handle: s.handle, control: "set_permission_mode", mode: a.patch.permissionMode }); s.req.permissionMode = a.patch.permissionMode; }
+      // a new process after a recycle: Remote Control is turned on again, attached to the same phone conversation
+      if (!s.proc && s.remoteWant) { s.proc = true; M.controls.push({ handle: s.handle, control: "remote_control", enabled: true, reattach_session_id: s.bridgeId || null }); s.remote = { connectUrl: s.remote?.connectUrl || `https://claude.ai/code/session_${s.bridgeId}` }; ev(s, "remote", remoteState(s)); }
       s.restoredPending = false;
       if (!s.turn) {
         if (running() >= maxPar()) { s.pending.push(m); s.waitSlot = true; status(s, "queued"); return { uuid: m.uuid, state: "queued" }; }
@@ -226,11 +300,25 @@ export async function handle(cmd, a) {
     case "cc_session_stop": {
       const s = live.get(a.handle);
       if (!s) return null;
+      if (s.remoteWant) { M.controls.push({ handle: s.handle, control: "remote_control", enabled: false, name: null }); s.remoteWant = false; s.remote = null; }
       s.abort = true; s.ended = now(); s.pending = []; s.inbox.length = 0;
       for (const r of s.rpcs) { rpcWaiters.get(r)?.({ allow: false }); rpcWaiters.delete(r); }
       s.status = "ended"; journal(s);
       live.delete(a.handle);
       return null;
+    }
+    case "cc_session_remote": {
+      const s = get(a.handle);
+      M.controls.push({ handle: s.handle, control: "remote_control", enabled: !!a.enabled, name: a.name || null, reattach_session_id: a.enabled ? s.bridgeId || null : null });
+      if (!a.enabled) { s.remote = null; s.remoteWant = false; s.bridgeId = null; ev(s, "remote", remoteState(s)); journal(s); return remoteState(s); }
+      await sleep(M.remoteDelay || 150);
+      if (M.remoteError) throw new Error(M.remoteError);
+      s.proc = true;
+      s.bridgeId = s.bridgeId || "bridge_" + uuid();
+      s.remote = { connectUrl: `https://claude.ai/code/session_${s.bridgeId}` };
+      s.remoteWant = true;
+      ev(s, "remote", remoteState(s)); journal(s);
+      return remoteState(s);
     }
     case "cc_session_stop_task": return null;
     case "cc_session_state": { const s = get(a.handle); return { handle: s.handle, status: s.status, claudeId: s.claudeId }; }

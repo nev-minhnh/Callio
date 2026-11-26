@@ -12,7 +12,8 @@
 //!  - an idle process is closed after `ccIdleMinutes`; the next message resumes it (`--resume`).
 //!  - the MCP server tells permission questions apart by the session handle in its URL path
 //!    (`/mcp/<handle>`), so every question reaches the right tab.
-use super::session_logic::{control_line, new_uuid, translate, user_line, Tracker};
+use super::mcp::PermReq;
+use super::session_logic::{control_error_line, control_line, control_response_line, friendly_rc_error, new_uuid, perm_body, perm_params, translate, user_line, Tracker};
 use super::{backups_dir, claude_cmd, diff_snapshots, ensure_server, find_claude, prune_backups, run_args, snapshot, ui_event, CcState, Extra, Snapshot, NO_THINKING_DISPLAY};
 use crate::util::{safe_name, CmdResult, ErrStr};
 use serde::Deserialize;
@@ -54,6 +55,8 @@ pub struct StartReq {
     run_in: Option<String>,
     /// [ssh] None = this computer, "ssh:<host id>" = on that server (wins over run_in)
     run_on: Option<String>,
+    /// [remote] Remote Control was on in the journal this session is brought back from: {on, bridgeSessionId, connectUrl}
+    remote_control: Value,
 }
 
 /// What may change between two messages of one session.
@@ -171,6 +174,16 @@ struct Inner {
     restored_pending: bool,
     waiters: HashMap<String, mpsc::Sender<Value>>,
     dirty: bool,
+    /// [remote] the author asked for Remote Control (kept across process restarts)
+    remote_want: bool,
+    /// [remote] what the last successful enable answered: {connectUrl, environmentId, bridgeSessionId, name}; Null = not connected now
+    remote: Value,
+    /// [remote] the bridge session id of the last enable (the phone keeps its conversation when it is re-attached)
+    bridge_id: Option<String>,
+    /// [remote] uuids of the messages Callio wrote itself: any other user message in the stream came from the phone
+    sent: VecDeque<String>,
+    /// [remote] permission questions asked over stdio and not answered yet: request_id → question
+    perms: HashMap<String, Arc<PermReq>>,
 }
 
 struct Sess {
@@ -240,6 +253,11 @@ fn queue_json(g: &Inner) -> Value {
     Value::Array(g.pending.iter().map(|m| one(m, true)).chain(g.unsent.iter().map(|m| one(m, false))).collect())
 }
 
+/// [remote] what the journal and the window know about Remote Control for a session.
+fn remote_json(g: &Inner) -> Value {
+    json!({"on": g.remote_want, "connected": !g.remote.is_null(), "bridgeSessionId": g.bridge_id, "connectUrl": g.remote["connectUrl"], "environmentId": g.remote["environmentId"]})
+}
+
 fn status_json(g: &Inner) -> Value {
     json!({"status": g.status, "proc": g.proc.is_some(), "turnActive": g.turn_active, "claudeId": g.claude_id, "queued": queue_json(g), "waiting": g.waiting_perms})
 }
@@ -271,6 +289,7 @@ fn full_state(handle: &str, g: &Inner) -> Value {
         "createdAt": g.created, "updatedAt": g.updated, "turnStartedAt": g.turn_started_ms, "endedAt": g.ended,
         "summary": g.summary, "lastError": g.last_error, "cleanEnd": clean_end(g), "meta": g.meta, "window": g.req.window,
         "settings": {"permissionMode": g.req.permission_mode, "effort": g.req.effort, "thinking": g.req.thinking, "web": g.req.web},
+        "remoteControl": remote_json(g),
     })
 }
 
@@ -334,7 +353,7 @@ fn ensure_bg(app: &AppHandle) {
                 for s in &all {
                     let idle = {
                         let g = s.inner.lock().unwrap();
-                        g.proc.is_some() && !g.turn_active && g.unsent.is_empty() && g.last_activity.elapsed() > limit
+                        super::session_logic::idle_closable(g.proc.is_some(), g.turn_active, g.unsent.is_empty(), g.remote_want, g.last_activity.elapsed(), limit)
                     };
                     if idle {
                         close_process(&app, s, "idle");
@@ -391,8 +410,43 @@ fn write_line(g: &mut Inner, line: String) -> Result<(), String> {
     p.tx.send(line).map_err(|_| "Claude Code stopped".to_string())
 }
 
+/// A message Callio writes itself: its uuid is remembered, so the echo of it in the stream is not
+/// mistaken for something typed on the phone.
+fn own_line(g: &mut Inner, text: &str, uuid: &str) -> String {
+    remember_uuid(g, uuid);
+    user_line(text, uuid, "next")
+}
+
+fn remember_uuid(g: &mut Inner, uuid: &str) {
+    g.sent.push_back(uuid.to_string());
+    while g.sent.len() > 400 {
+        g.sent.pop_front();
+    }
+}
+
 fn send_control(g: &mut Inner, id: &str, request: Value) -> Result<(), String> {
     write_line(g, control_line(id, request))
+}
+
+/// Every session asks its permission questions over stdio (`can_use_tool` control requests) instead
+/// of Callio's MCP `approve` tool: that way the same question can also be answered from the phone
+/// when Remote Control is on, and Remote Control can be switched on without restarting the process.
+/// `--replay-user-messages` makes Claude Code echo every user message with its uuid, which is how
+/// a message typed on the phone shows up in the transcript.
+fn stdio_args(a: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
+    let mut out = Vec::with_capacity(a.len() + 1);
+    let mut it = a.into_iter();
+    while let Some(x) = it.next() {
+        if x == "--permission-prompt-tool" {
+            it.next();
+            out.push(x);
+            out.push("stdio".into());
+        } else {
+            out.push(x);
+        }
+    }
+    out.push("--replay-user-messages".into());
+    out
 }
 
 fn spawn_proc(app: &AppHandle, sess: &Arc<Sess>, g: &mut Inner) -> Result<(), String> {
@@ -428,10 +482,10 @@ fn spawn_proc(app: &AppHandle, sess: &Arc<Sess>, g: &mut Inner) -> Result<(), St
     let mode = g.req.permission_mode.clone();
     let extra = Extra { effort: g.req.effort.as_deref(), thinking: g.req.thinking, web: g.req.web.as_deref() };
     let mut c = match &wsl {
-        Some(w) => w.command(run_args(&w.path(&cfg), &w.path(&sys), &mode, g.req.model.as_deref(), resume.as_deref(), &extra)),
+        Some(w) => w.command(stdio_args(run_args(&w.path(&cfg), &w.path(&sys), &mode, g.req.model.as_deref(), resume.as_deref(), &extra))),
         None => {
             let mut c = claude_cmd(&exe);
-            c.current_dir(&cwd).args(run_args(&cfg, &sys, &mode, g.req.model.as_deref(), resume.as_deref(), &extra));
+            c.current_dir(&cwd).args(stdio_args(run_args(&cfg, &sys, &mode, g.req.model.as_deref(), resume.as_deref(), &extra)));
             c
         }
     };
@@ -467,7 +521,7 @@ fn spawn_remote(app: &AppHandle, sess: &Arc<Sess>, g: &mut Inner, host: &str) ->
     let extra = Extra { effort: g.req.effort.as_deref(), thinking: g.req.thinking, web: g.req.web.as_deref() };
     let (m2, r2) = (mode.clone(), resume.clone());
     let build = move |cfg: &str, sys: &str| -> Vec<String> {
-        let mut a: Vec<String> = run_args(Path::new(cfg), Path::new(sys), &m2, model.as_deref(), r2.as_deref(), &extra).into_iter().map(|x| x.to_string_lossy().to_string()).collect();
+        let mut a: Vec<String> = stdio_args(run_args(Path::new(cfg), Path::new(sys), &m2, model.as_deref(), r2.as_deref(), &extra)).into_iter().map(|x| x.to_string_lossy().to_string()).collect();
         a.extend(["--input-format".to_string(), "stream-json".to_string()]);
         a
     };
@@ -497,6 +551,15 @@ fn attach(app: &AppHandle, sess: &Arc<Sess>, g: &mut Inner, mut stdin: Box<dyn W
     g.cli_requires_action = false;
     g.proc = Some(Proc { child: child.clone(), tx, mode, model: g.req.model.clone(), cfg, sys });
     let (app2, sess2, gen) = (app.clone(), sess.clone(), g.gen);
+    if g.remote_want {
+        // Remote Control was on before this process (idle close, interrupt that didn't work, crash): turn it on again, attached to the same phone conversation
+        let (app3, sess3) = (app.clone(), sess.clone());
+        std::thread::spawn(move || {
+            if let Err(e) = remote_enable(&app3, &sess3, gen, None) {
+                emit(&app3, &sess3.handle, "remote_error", json!({"error": e}));
+            }
+        });
+    }
     std::thread::spawn(move || reader(app2, sess2, gen, stdout, stderr, child));
 }
 
@@ -554,9 +617,23 @@ fn handle_line(app: &AppHandle, sess: &Arc<Sess>, gen: u64, tr: &mut Tracker, v:
         let id = v["response"]["request_id"].as_str().unwrap_or("");
         let mut g = sess.inner.lock().unwrap();
         if let Some(tx) = g.waiters.remove(id) {
-            let _ = tx.send(v["response"]["response"].clone());
+            let _ = tx.send(v["response"].clone());
         }
         return;
+    }
+    match v["type"].as_str().unwrap_or("") {
+        // a permission question (or another request) from Claude Code itself
+        "control_request" => return on_control_request(app, sess, gen, v),
+        // …and "answered elsewhere, close it"
+        "control_cancel_request" => {
+            let p = sess.inner.lock().unwrap().perms.get(v["request_id"].as_str().unwrap_or("")).cloned();
+            if let Some(p) = p {
+                p.withdraw();
+            }
+            return;
+        }
+        "user" if v["isReplay"] == true => return on_user_echo(app, sess, v),
+        _ => {}
     }
     for ev in translate(v, tr, &ui_event) {
         match ev["kind"].as_str().unwrap_or("") {
@@ -611,6 +688,14 @@ fn handle_line(app: &AppHandle, sess: &Arc<Sess>, gen: u64, tr: &mut Tracker, v:
             "result" => {
                 {
                     let mut g = sess.inner.lock().unwrap();
+                    // a turn that ended "aborted" without Callio's Stop: stopped from the phone
+                    let aborted = ev["terminalReason"].as_str().map(|r| r.starts_with("aborted")).unwrap_or(false);
+                    if aborted && !g.interrupted && g.remote_want {
+                        emit(app, h, "remote_interrupt", json!({}));
+                    }
+                    if aborted {
+                        g.interrupted = true;
+                    }
                     g.tokens = ev["tokens"].as_u64().unwrap_or(g.tokens);
                     g.last_result_error = ev["isError"].as_bool().unwrap_or(false) && !g.interrupted;
                     g.last_error = if g.last_result_error { Some(ev["errors"].as_str().filter(|s| !s.is_empty()).or(ev["text"].as_str()).unwrap_or("").to_string()) } else { None };
@@ -625,6 +710,79 @@ fn handle_line(app: &AppHandle, sess: &Arc<Sess>, gen: u64, tr: &mut Tracker, v:
             _ => emit_raw(app, h, ev),
         }
     }
+}
+
+/// A `can_use_tool` request: Claude Code asks whether it may run a tool. The question goes to the
+/// session's window as a card (the same rpc "permission" the MCP `approve` tool used); the answer
+/// goes back as a control response. When the phone answers first, Claude Code sends
+/// `control_cancel_request` and the card is withdrawn (see `PermReq::withdraw`); when Callio
+/// answers first Claude Code withdraws the phone's prompt itself.
+fn on_control_request(app: &AppHandle, sess: &Arc<Sess>, gen: u64, v: &Value) {
+    let id = v["request_id"].as_str().unwrap_or("").to_string();
+    let req = &v["request"];
+    let reply = |line: String| {
+        let mut g = sess.inner.lock().unwrap();
+        if g.gen == gen {
+            let _ = write_line(&mut g, line);
+        }
+    };
+    if req["subtype"] != "can_use_tool" {
+        // something this version of Callio doesn't answer: say so instead of leaving Claude Code waiting
+        return reply(control_error_line(&id, &format!("Callio doesn't handle {} requests", req["subtype"].as_str().unwrap_or("these"))));
+    }
+    let tool = req["tool_name"].as_str().unwrap_or("").to_string();
+    let input = if req["input"].is_object() { req["input"].clone() } else { json!({}) };
+    let tuid = req["tool_use_id"].as_str().map(String::from);
+    // Callio's own tools never need a question
+    if tool.starts_with("mcp__callio__") {
+        return reply(control_response_line(&id, perm_body(Some(&json!({"allow": true})), &input, tuid.as_deref())));
+    }
+    let track = Arc::new(PermReq::default());
+    sess.inner.lock().unwrap().perms.insert(id.clone(), track.clone());
+    let params = perm_params(req, &sess.handle);
+    let (app2, sess2) = (app.clone(), sess.clone());
+    tauri::async_runtime::spawn(async move {
+        perm_delta(&app2, &sess2.handle, 1);
+        let r = super::mcp::ask_window_for(&app2, "permission", params, Duration::from_secs(3600), Some(track.clone())).await;
+        perm_delta(&app2, &sess2.handle, -1);
+        let mut g = sess2.inner.lock().unwrap();
+        g.perms.remove(&id);
+        if track.elsewhere.load(Ordering::SeqCst) || g.gen != gen {
+            return; // answered on the phone, or the process is gone
+        }
+        let _ = write_line(&mut g, control_response_line(&id, perm_body(r.as_ref(), &input, tuid.as_deref())));
+    });
+}
+
+/// The process ended or was stopped: its open questions can't be answered any more.
+fn withdraw_perms(g: &mut Inner) {
+    for (_, p) in g.perms.drain() {
+        p.withdraw();
+    }
+}
+
+/// With `--replay-user-messages` every user message comes back with its uuid. One that Callio did
+/// not write (and that is not Claude Code's own) was typed on the phone while Remote Control is on.
+fn on_user_echo(app: &AppHandle, sess: &Arc<Sess>, v: &Value) {
+    let uuid = v["uuid"].as_str().unwrap_or("").to_string();
+    if uuid.is_empty() || v["isSynthetic"] == true || !v["parent_tool_use_id"].is_null() {
+        return;
+    }
+    let text = match &v["message"]["content"] {
+        Value::String(s) => s.clone(),
+        Value::Array(a) => a.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n"),
+        _ => String::new(),
+    };
+    {
+        let mut g = sess.inner.lock().unwrap();
+        if !g.remote_want || g.sent.iter().any(|u| *u == uuid) || text.trim().is_empty() {
+            return;
+        }
+        remember_uuid(&mut g, &uuid); // the same message can be echoed twice (queued, then read)
+        g.last_activity = Instant::now();
+        touch(&mut g);
+    }
+    emit(app, &sess.handle, "phone_msg", json!({"uuid": uuid, "text": text, "at": now_ms()}));
 }
 
 fn on_state(app: &AppHandle, sess: &Arc<Sess>, gen: u64, tr: &mut Tracker, state: &str) {
@@ -777,6 +935,11 @@ fn on_exit(app: &AppHandle, sess: &Arc<Sess>, gen: u64, code: Option<i32>, stder
         return; // an older process, already replaced
     }
     g.proc = None;
+    withdraw_perms(&mut g);
+    if !g.remote.is_null() {
+        g.remote = Value::Null; // the process that held the connection is gone; the next one re-enables it
+        emit(app, &h, "remote", remote_json(&g));
+    }
     let intentional = std::mem::take(&mut g.closing);
     if !intentional && !g.proc_events {
         // A Claude Code without the (hidden) thinking-display option, or a session that was never
@@ -792,7 +955,8 @@ fn on_exit(app: &AppHandle, sess: &Arc<Sess>, gen: u64, code: Option<i32>, stder
                 g.req.resume_id = None;
             }
             if spawn_proc(app, sess, &mut g).is_ok() {
-                let lines: Vec<String> = g.pending.iter().map(|m| user_line(&m.text, &m.uuid, "next")).collect();
+                let msgs: Vec<(String, String)> = g.pending.iter().map(|m| (m.text.clone(), m.uuid.clone())).collect();
+                let lines: Vec<String> = msgs.iter().map(|(t, u)| own_line(&mut g, t, u)).collect();
                 for l in lines {
                     let _ = write_line(&mut g, l);
                 }
@@ -830,6 +994,7 @@ fn kill_proc(sess: &Sess, closing: bool) {
     let child = {
         let mut g = sess.inner.lock().unwrap();
         g.closing = closing;
+        withdraw_perms(&mut g);
         g.proc.take().map(|p| (p.child.clone(), p.tx, p.cfg, p.sys))
     };
     if let Some((child, tx, _cfg, _sys)) = child {
@@ -842,7 +1007,7 @@ fn kill_proc(sess: &Sess, closing: bool) {
 fn close_process(app: &AppHandle, sess: &Arc<Sess>, reason: &str) {
     {
         let g = sess.inner.lock().unwrap();
-        if g.turn_active || g.proc.is_none() {
+        if g.turn_active || g.proc.is_none() || g.remote_want {
             return;
         }
     }
@@ -853,6 +1018,143 @@ fn close_process(app: &AppHandle, sess: &Arc<Sess>, reason: &str) {
         s["reason"] = json!(reason);
         s
     });
+}
+
+// ---------------- Remote Control ----------------
+
+/// Send one `remote_control` control request and wait for the answer: the success body
+/// (`connect_url`, `environment_id`, `bridge_session_id`) or Claude Code's error text.
+fn remote_request(sess: &Arc<Sess>, mut req: Value, wait: Duration) -> Result<Value, String> {
+    let id = format!("rc-{}", SEQ.fetch_add(1, Ordering::SeqCst));
+    let (tx, rx) = mpsc::channel();
+    {
+        let mut g = sess.inner.lock().unwrap();
+        g.waiters.insert(id.clone(), tx);
+        req["subtype"] = json!("remote_control");
+        if let Err(e) = send_control(&mut g, &id, req) {
+            g.waiters.remove(&id);
+            return Err(e);
+        }
+    }
+    let r = rx.recv_timeout(wait);
+    sess.inner.lock().unwrap().waiters.remove(&id);
+    match r {
+        Ok(v) if v["subtype"] == "success" => Ok(v["response"].clone()),
+        Ok(v) => Err(friendly_rc_error(v["error"].as_str().unwrap_or(""))),
+        Err(_) => Err("Claude Code didn't answer Remote Control in time. Check the internet connection and try again.".into()),
+    }
+}
+
+/// Switch Remote Control on in the running process `gen` (the phone keeps its conversation when a
+/// bridge session id is known). Records the answer in the session and the journal.
+fn remote_enable(app: &AppHandle, sess: &Arc<Sess>, gen: u64, name: Option<String>) -> Result<Value, String> {
+    let (title, bridge) = {
+        let g = sess.inner.lock().unwrap();
+        let t = name.or_else(|| g.meta["title"].as_str().filter(|t| !t.is_empty()).map(String::from)).or_else(|| Some(g.req.label.clone()).filter(|l| !l.is_empty())).unwrap_or_else(|| "Callio".into());
+        (t, g.bridge_id.clone())
+    };
+    let ask = |bridge: Option<&str>| {
+        let mut req = json!({"enabled": true, "name": title, "keep_session_on_exit": true});
+        if let Some(b) = bridge {
+            req["reattach_session_id"] = json!(b);
+        }
+        remote_request(sess, req, Duration::from_secs(90))
+    };
+    let r = match ask(bridge.as_deref()) {
+        // the old phone conversation can't be re-attached (gone): start a new one
+        Err(_) if bridge.is_some() => ask(None),
+        other => other,
+    }?;
+    let info = json!({"connectUrl": r["connect_url"], "environmentId": r["environment_id"], "bridgeSessionId": r["bridge_session_id"], "name": title});
+    {
+        let mut g = sess.inner.lock().unwrap();
+        if g.gen != gen {
+            return Err("Claude Code was restarted; try again".into());
+        }
+        g.remote_want = true;
+        g.bridge_id = info["bridgeSessionId"].as_str().map(String::from).or(g.bridge_id.take());
+        g.remote = info;
+        g.last_activity = Instant::now();
+        touch(&mut g);
+        emit(app, &sess.handle, "remote", remote_json(&g));
+    }
+    write_journal(app, sess);
+    Ok(remote_state(sess))
+}
+
+fn remote_state(sess: &Sess) -> Value {
+    remote_json(&sess.inner.lock().unwrap())
+}
+
+/// Turn Remote Control off in the running process (if any) and forget it.
+fn remote_disable(app: &AppHandle, sess: &Arc<Sess>) {
+    let alive = {
+        let mut g = sess.inner.lock().unwrap();
+        let alive = g.proc.is_some() && (g.remote_want || !g.remote.is_null());
+        g.remote_want = false;
+        g.remote = Value::Null;
+        g.bridge_id = None;
+        touch(&mut g);
+        alive
+    };
+    if alive {
+        let _ = remote_request(sess, json!({"enabled": false}), Duration::from_secs(10));
+    }
+    emit(app, &sess.handle, "remote", remote_state(sess));
+    write_journal(app, sess);
+}
+
+/// The session ends for good: the phone's conversation must not be left behind.
+fn remote_off_quietly(sess: &Arc<Sess>) {
+    let on = {
+        let mut g = sess.inner.lock().unwrap();
+        let on = g.proc.is_some() && g.remote_want;
+        g.remote_want = false;
+        on
+    };
+    if on {
+        let _ = remote_request(sess, json!({"enabled": false}), Duration::from_secs(3));
+    }
+}
+
+/// Remote Control for one session: `enabled` turns it on (starting the process if it was closed)
+/// or off. Answers {on, connected, connectUrl, bridgeSessionId…} or an error that says what to do.
+#[tauri::command]
+pub async fn cc_session_remote(app: AppHandle, handle: String, enabled: bool, name: Option<String>) -> CmdResult<Value> {
+    let sess = get(&handle).ok_or("This session isn't open any more")?;
+    tauri::async_runtime::spawn_blocking(move || -> CmdResult<Value> {
+        if !enabled {
+            remote_disable(&app, &sess);
+            return Ok(remote_state(&sess));
+        }
+        let gen = {
+            let mut g = sess.inner.lock().unwrap();
+            if g.ended.is_some() {
+                return Err("This session has ended".into());
+            }
+            if g.proc.is_none() {
+                g.last_activity = Instant::now(); // so the idle check leaves the new process alone
+                spawn_proc(&app, &sess, &mut g)?;
+            }
+            g.gen
+        };
+        let r = remote_enable(&app, &sess, gen, name);
+        if r.is_err() {
+            let mut g = sess.inner.lock().unwrap();
+            g.remote_want = false;
+            touch(&mut g);
+        }
+        r
+    })
+    .await
+    .es()?
+}
+
+/// A QR code (SVG) of the Remote Control link, to scan with the phone.
+#[tauri::command]
+pub fn cc_qr_svg(text: String) -> CmdResult<String> {
+    let code = qrcode::QrCode::with_error_correction_level(text.as_bytes(), qrcode::EcLevel::M).es()?;
+    Ok(code.render::<qrcode::render::svg::Color>().min_dimensions(180, 180).quiet_zone(true).dark_color(qrcode::render::svg::Color("#000000")).light_color(qrcode::render::svg::Color("#ffffff")).build())
 }
 
 // ---------------- turns ----------------
@@ -893,7 +1195,7 @@ fn begin_turn(app: &AppHandle, sess: &Arc<Sess>, msgs: Vec<Msg>) -> Result<(), S
         return Err(e);
     }
     for m in msgs {
-        let line = user_line(&m.text, &m.uuid, "next");
+        let line = own_line(&mut g, &m.text, &m.uuid);
         if let Err(e) = write_line(&mut g, line) {
             g.last_error = Some(e);
         }
@@ -963,6 +1265,7 @@ pub async fn cc_session_start(app: AppHandle, req: StartReq) -> CmdResult<Value>
     }
     let now = now_ms();
     let restored = req.restored;
+    let remote_was = req.remote_control.clone();
     let g = Inner {
         meta: if req.meta.is_object() { req.meta.clone() } else { json!({}) },
         req,
@@ -997,6 +1300,11 @@ pub async fn cc_session_start(app: AppHandle, req: StartReq) -> CmdResult<Value>
         before: None,
         restored_pending: restored,
         dirty: true,
+        remote_want: remote_was["on"].as_bool().unwrap_or(false),
+        remote: Value::Null,
+        bridge_id: remote_was["bridgeSessionId"].as_str().filter(|s| !s.is_empty()).map(String::from),
+        sent: VecDeque::new(),
+        perms: HashMap::new(),
     };
     let sess = Arc::new(Sess { handle: handle.clone(), inner: Mutex::new(g), cv: Condvar::new() });
     {
@@ -1005,6 +1313,16 @@ pub async fn cc_session_start(app: AppHandle, req: StartReq) -> CmdResult<Value>
     }
     mgr().map.lock().unwrap().insert(handle.clone(), sess.clone());
     write_journal(&app, &sess);
+    // Remote Control was on when the app stopped: the phone expects this session to be reachable, so start its process now
+    if sess.inner.lock().unwrap().remote_want {
+        let (app2, sess2) = (app.clone(), sess.clone());
+        std::thread::spawn(move || {
+            let r = { let mut g = sess2.inner.lock().unwrap(); if g.proc.is_none() { spawn_proc(&app2, &sess2, &mut g) } else { Ok(()) } };
+            if let Err(e) = r {
+                emit(&app2, &sess2.handle, "remote_error", json!({"error": e}));
+            }
+        });
+    }
     Ok(json!({"handle": handle}))
 }
 
@@ -1063,7 +1381,7 @@ fn send_blocking(app: &AppHandle, sess: &Arc<Sess>, text: String, mode: String, 
     let mut g = sess.inner.lock().unwrap();
     if g.turn_active && g.proc.is_some() {
         // mid-turn: the model reads it after the step it is doing now
-        let line = user_line(&msg.text, &msg.uuid, "next");
+        let line = own_line(&mut g, &msg.text, &msg.uuid);
         write_line(&mut g, line)?;
         g.pending.push(msg);
         g.last_activity = Instant::now();
@@ -1115,7 +1433,7 @@ pub async fn cc_session_cancel_queued(app: AppHandle, handle: String, uuid: Stri
             send_control(&mut g, &id, json!({"subtype": "cancel_async_message", "message_uuid": uuid}))?;
             (rx, id)
         };
-        let ok = rx.0.recv_timeout(Duration::from_secs(3)).map(|v| v["cancelled"].as_bool().unwrap_or(false)).unwrap_or(false);
+        let ok = rx.0.recv_timeout(Duration::from_secs(3)).map(|v| v["response"]["cancelled"].as_bool().unwrap_or(false)).unwrap_or(false);
         let mut g = sess.inner.lock().unwrap();
         g.waiters.remove(&rx.1);
         if ok {
@@ -1178,6 +1496,7 @@ pub async fn cc_session_stop(app: AppHandle, handle: String) -> CmdResult<()> {
     let Some(sess) = get(&handle) else { return Ok(()) };
     tauri::async_runtime::spawn_blocking(move || {
         mgr().waiting.lock().unwrap().retain(|h| h != &handle);
+        remote_off_quietly(&sess);
         let (settled, files) = {
             let mut g = sess.inner.lock().unwrap();
             g.ended = Some(now_ms());
@@ -1323,6 +1642,7 @@ pub fn cc_journal_end(app: AppHandle, handles: Option<Vec<String>>) -> CmdResult
 pub fn on_app_exit(app: &AppHandle) {
     let all: Vec<Arc<Sess>> = mgr().map.lock().unwrap().values().cloned().collect();
     for s in all {
+        remote_off_quietly(&s);
         {
             let mut g = s.inner.lock().unwrap();
             g.ended = Some(now_ms());
